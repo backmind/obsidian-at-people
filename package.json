@@ -1,7 +1,7 @@
 {
   "name": "obsidian-at-people",
-  "version": "1.0.2",
-  "description": "Use the @ to create links to people files.",
+  "version": "1.1.0",
+  "description": "Use the @ to create links to people files with smart fuzzy search, accent-insensitive matching, and backlink-based ranking.",
   "main": "main.js",
   "repository": {
     "type": "git",
@@ -10,13 +10,29 @@
   "keywords": [
     "obsidian",
     "obsidian-plugin",
-    "people"
+    "people",
+    "fuzzy-search",
+    "backlinks"
   ],
   "author": {
     "name": "Tobias Davis",
     "email": "tobias@davistobias.com",
     "url": "https://davistobias.com"
   },
+  "contributors": [
+    {
+      "name": "Yass Fuentes",
+      "url": "https://github.com/backmind"
+    },
+    {
+      "name": "Phil Hawkshaw ",
+      "url": "https://github.com/ph4wks"
+    },
+    {
+      "name": " Marvyn Zalewski ",
+      "url": "https://github.com/hExPY"
+    }
+  ],
   "license": "See license in LICENSE.md",
   "bugs": {
     "url": "https://github.com/saibotsivad/obsidian-at-people/issues"

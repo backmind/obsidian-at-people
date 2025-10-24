@@ -12,9 +12,26 @@ The author was [[@Rich Hickey]]
 
 and leave the cursor at the end.
 
-## Options
+## Search Features
 
-There's not a lot to configure here, but they are important:
+This plugin includes intelligent fuzzy search with the following capabilities:
+
+- **Accent-insensitive**: Search for "martin" and find "Martín García"
+- **Case-insensitive**: "JOHN" matches "John Doe"
+- **Substring matching**: "rich" matches "Rich Hickey" or "Rich Harris"
+- **Multi-word search**: "juan car" matches "Juan Carlos"
+- **Initials matching**: "jc" matches "Juan Carlos"
+- **Word-start matching**: "mar" matches "Juan Martinez"
+- **Smart ranking**: Results are prioritized by:
+  - Exact matches at name start (highest priority)
+  - Matches at word boundaries
+  - Number of backlinks (frequently referenced people rank higher)
+
+**Note**: The search only returns contiguous matches. Searching "lun" will NOT match "Laura Undurry Navaez" (non-contiguous letters).
+
+## Configuration Options
+
+The plugin offers several configuration options to customize behavior:
 
 ### 1. Where are the people files?
 
@@ -44,13 +61,57 @@ But you might rather make that explicit, in which case you can enable "explicit 
 [[People/@Rich Hickey.md|@Rich Hickey]]
 ```
 
-### 3. Last name grouping?
+### 3. Folder Mode
 
-For my personal Obsidian vaults, I have a lot of people with my same last name, so I put them in sub-folders for organization.
+You can store the people in three different ways using the dropdown.
 
-You can toggle the "last name folder" option, and it'll do that in the links.
+#### Default
 
-The earlier example folder structure would be:
+This setting is the default. It creates a single file per person.
+
+Example:
+
+```
+People/
+	@Rich Hickey.md
+	@Rich Harris.md
+```
+
+And then the inserted link would look like:
+
+```
+[[People/@Rich Hickey.md|@Rich Hickey]]
+or if explicit link is disabled
+[[@Rich Hickey]]
+```
+
+#### Per Person
+
+This setting will create a directory per person. You can use it to store multiple notes related to the same person. It requires "Explicit link" to be enabled.
+
+Example:
+
+```
+People/
+	@Rich Hickey/
+		@Rich Hickey.md
+		more-files.md
+	@Rich Harris/
+		@Rich Harris.md
+		more-files.md
+```
+
+And then the inserted link would look like:
+
+```
+[[People/@Rich Hickey/@Rich Hickey.md|@Rich Hickey]]
+```
+
+#### Per Lastname
+
+This setting will create a directory per lastname and a single file for the person itself. You can e.g. use it if you have many people sharing the same lastname. It requires "Explicit link" to be enabled.
+
+Example:
 
 ```
 People/
@@ -70,9 +131,51 @@ And then the inserted link would look like:
 >
 > I'm open to better implementations that don't add a lot of complexity, just start a discussion.
 
+### 4. Auto-create files
+
+When enabled, the plugin will automatically create person files and the necessary folders when you select a person suggestion. This works seamlessly with all folder modes:
+
+- **Default mode**: Creates the file directly in the People folder
+- **Per Person mode**: Creates a folder for the person and the file inside it
+- **Per Lastname mode**: Creates a folder for the lastname and the file inside it
+
+If this setting is disabled (default), you need to manually create the person files yourself.
+
+## Technical Features
+
+### Performance
+- Results are limited to top 20 suggestions to maintain responsiveness
+- Backlink counts are only calculated for matching results (not all people)
+- Efficient in-memory caching of person files
+
+### Smart Ranking Algorithm
+The plugin uses a sophisticated scoring system that combines:
+- **Pattern matching score** (800-3000 points):
+  - Exact match at name start: 3000 pts
+  - Match at word boundary: 2500 pts
+  - Multi-word pattern match: 1500 pts
+  - Word initials match: 1000 pts
+  - Word start match: 800 pts
+- **Backlink boost** (0-460+ points):
+  - Logarithmic scale based on reference frequency
+  - 1 backlink ≈ 69 pts
+  - 10 backlinks ≈ 230 pts
+  - 100 backlinks ≈ 460 pts
+
+This ensures frequently-used people appear higher in suggestions while maintaining relevance to your search query.
+
 ## Conflicts
 
 Several plugins have conflicts with using the `@` symbol, please look at the [Github issues for plugin conflicts](https://github.com/saibotsivad/obsidian-at-people/issues?q=is%3Aissue+conflict+) to see if yours has been resolved.
+
+## Contributors
+
+This plugin is built upon the work of multiple contributors:
+
+- **[saibotsivad](https://github.com/saibotsivad/obsidian-at-people)** - Original plugin author and creator
+- **[ph4wks](https://github.com/ph4wks/obsidian-at-people)** - Folder mode variations and auto-file creation features
+- **[hExPY](https://github.com/hExPY/obsidian-at-people/)** - Additional enhancements and improvements
+- **[backmind](https://github.com/backmind/obsidian-at-people)** - Fuzzy search implementation, accent-insensitive matching, and backlink-based ranking (v1.1.0)
 
 ## License
 

@@ -1,9 +1,9 @@
 {
   "id": "at-people",
   "name": "At People",
-  "version": "1.0.2",
-  "description": "Use the @ to create links to people files.",
-  "author": "saibotsivad",
-  "authorUrl": "https://davistobias.com",
+  "version": "1.1.0",
+  "description": "Use the @ to create links to people files with smart fuzzy search, accent-insensitive matching, and backlink-based ranking.",
+  "author": "saibotsivad, backmind, ph4wks, hExPY",
+  "authorUrl": "https://github.com/saibotsivad/obsidian-at-people",
   "isDesktopOnly": false
 }

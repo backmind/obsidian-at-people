@@ -12,6 +12,21 @@ The author was [[@Rich Hickey]]
 
 and leave the cursor at the end.
 
+> **Maintenance Transfer**: This is now the actively maintained version of the At-People plugin, with permission from the original creator [Tobias Davis (saibotsivad)](https://github.com/saibotsivad). The [original repository](https://github.com/saibotsivad/obsidian-at-people) has been archived as of October 2025. We're grateful to Tobias for creating this plugin and for entrusting the community with its continued development.
+
+## Installation
+
+### From Obsidian Community Plugins
+1. Open Settings → Community plugins
+2. Search for "At-People"
+3. Click Install, then Enable
+
+### Manual Installation
+1. Download latest release from [Releases](https://github.com/backmind/obsidian-at-people/releases)
+2. Extract to `<vault>/.obsidian/plugins/at-people/`
+3. Reload Obsidian
+4. Enable plugin in Settings → Community plugins
+
 ## Search Features
 
 This plugin includes intelligent fuzzy search with the following capabilities:
@@ -127,7 +142,7 @@ And then the inserted link would look like:
 [[People/Hickey/@Rich Hickey.md|@Rich Hickey]]
 ```
 
-> Note: figuring out what the "last name" is (or if it even has one) is really complicated! This plugin takes a very simply approach: if you split a name by the space character, it'll just pick the last "word". So for example "Charles Le Fabre" would be "Fabre" and *not* "Le Fabre".
+> Note: figuring out what the "last name" is (or if it even has one) is really complicated! This plugin takes a very simple approach: if you split a name by the space character, it'll just pick the last "word". So for example "Charles Le Fabre" would be "Fabre" and *not* "Le Fabre".
 >
 > I'm open to better implementations that don't add a lot of complexity, just start a discussion.
 
@@ -166,16 +181,20 @@ This ensures frequently-used people appear higher in suggestions while maintaini
 
 ## Conflicts
 
-Several plugins have conflicts with using the `@` symbol, please look at the [Github issues for plugin conflicts](https://github.com/saibotsivad/obsidian-at-people/issues?q=is%3Aissue+conflict+) to see if yours has been resolved.
+Several plugins have conflicts with using the `@` symbol, please look at the [Github issues for plugin conflicts](https://github.com/backmind/obsidian-at-people/issues?q=is%3Aissue+conflict+) to see if yours has been resolved.
+
+## Contributing
+
+Contributions welcome. Open an issue first to discuss major changes.
 
 ## Contributors
 
 This plugin is built upon the work of multiple contributors:
 
-- **[saibotsivad](https://github.com/saibotsivad/obsidian-at-people)** - Original plugin author and creator
-- **[ph4wks](https://github.com/ph4wks/obsidian-at-people)** - Folder mode variations and auto-file creation features
-- **[hExPY](https://github.com/hExPY/obsidian-at-people/)** - Additional enhancements and improvements
-- **[backmind](https://github.com/backmind/obsidian-at-people)** - Fuzzy search implementation, accent-insensitive matching, and backlink-based ranking (v1.1.0)
+- **@saibotsivad** - Original plugin creator (2021-2023)
+- **@ph4wks** - Folder mode variations and auto-file creation features
+- **@hExPY** - Additional enhancements and improvements
+- **@backmind** - Current maintainer; fuzzy search, accent-insensitive matching, and backlink-based ranking (v1.1.0+)
 
 ## License
 

@@ -191,10 +191,10 @@ Contributions welcome. Open an issue first to discuss major changes.
 
 This plugin is built upon the work of multiple contributors:
 
-- **@saibotsivad** - Original plugin creator (2021-2023)
-- **@ph4wks** - Folder mode variations and auto-file creation features
-- **@hExPY** - Additional enhancements and improvements
-- **@backmind** - Current maintainer; fuzzy search, accent-insensitive matching, and backlink-based ranking (v1.1.0+)
+- **[saibotsivad](https://github.com/saibotsivad/obsidian-at-people)** - Original plugin author and creator
+- **[ph4wks](https://github.com/ph4wks/obsidian-at-people)** - Folder mode variations and auto-file creation features
+- **[hExPY](https://github.com/hExPY/obsidian-at-people/)** - Additional enhancements and improvements
+- **[backmind](https://github.com/backmind/obsidian-at-people)** - Current maintainer; fuzzy search, accent-insensitive matching, and backlink-based ranking (v1.1.0+)
 
 ## License
 

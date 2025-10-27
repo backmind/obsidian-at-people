@@ -5,7 +5,7 @@
   "main": "main.js",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/saibotsivad/obsidian-at-people.git"
+    "url": "git+https://github.com/backmind/obsidian-at-people.git"
   },
   "keywords": [
     "obsidian",
@@ -15,27 +15,27 @@
     "backlinks"
   ],
   "author": {
-    "name": "Tobias Davis",
-    "email": "tobias@davistobias.com",
-    "url": "https://davistobias.com"
+    "name": "Yass Fuentes",
+    "url": "https://github.com/backmind"
   },
   "contributors": [
     {
-      "name": "Yass Fuentes",
-      "url": "https://github.com/backmind"
+      "name": "Tobias Davis",
+      "email": "tobias@davistobias.com",
+      "url": "https://github.com/saibotsivad"
     },
     {
-      "name": "Phil Hawkshaw ",
+      "name": "Phil Hawkshaw",
       "url": "https://github.com/ph4wks"
     },
     {
-      "name": " Marvyn Zalewski ",
+      "name": "Marvyn Zalewski",
       "url": "https://github.com/hExPY"
     }
   ],
   "license": "See license in LICENSE.md",
   "bugs": {
-    "url": "https://github.com/saibotsivad/obsidian-at-people/issues"
+    "url": "https://github.com/backmind/obsidian-at-people/issues"
   },
-  "homepage": "https://github.com/saibotsivad/obsidian-at-people#readme"
+  "homepage": "https://github.com/backmind/obsidian-at-people#readme"
 }

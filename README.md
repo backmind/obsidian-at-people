@@ -7,7 +7,9 @@ Obsidian plugin to add that familiar @-to-tag-someone syntax:
 When you hit enter on a suggestion, it'll create a link that looks like this:
 
 ```
+
 The author was [[@Rich Hickey]]
+
 ```
 
 and leave the cursor at the end.
@@ -26,6 +28,18 @@ and leave the cursor at the end.
 2. Extract to `<vault>/.obsidian/plugins/at-people/`
 3. Reload Obsidian
 4. Enable plugin in Settings → Community plugins
+
+## 🎉 New Features
+
+### Link Selected Text (New!)
+You can now select any text in your editor and quickly convert it into a person link using a search modal.
+
+1.  Select a piece of text (e.g., "Rich Hickey").
+2.  Run the command from the palette: **"At-People: Link selected text to person"**.
+3.  A search modal will appear, allowing you to find an existing person or create a new one.
+4.  On selection, the text will be replaced with the formatted link (e.g., `[[@Rich Hickey]]`).
+
+> **Pro-tip**: You can assign a hotkey to this command, such as `Ctrl+Shift+A`, from the Obsidian `Settings → Hotkeys` menu for even faster linking.
 
 ## Search Features
 
@@ -55,9 +69,11 @@ You probably want to group the people files in a folder.
 I usually do something like this:
 
 ```
+
 People/
-	@Rich Hickey.md
-	@Rich Harris.md
+@Rich Hickey.md
+@Rich Harris.md
+
 ```
 
 You can configure that in settings to point to somewhere else, like `Reference/People/` or whatever makes sense.
@@ -67,13 +83,17 @@ You can configure that in settings to point to somewhere else, like `Reference/P
 By default, the plugin will insert the simple version:
 
 ```
+
 [[@Rich Hickey]]
+
 ```
 
 But you might rather make that explicit, in which case you can enable "explicit links" and they'll look like this instead:
 
 ```
+
 [[People/@Rich Hickey.md|@Rich Hickey]]
+
 ```
 
 ### 3. Folder Mode
@@ -87,17 +107,21 @@ This setting is the default. It creates a single file per person.
 Example:
 
 ```
+
 People/
-	@Rich Hickey.md
-	@Rich Harris.md
+@Rich Hickey.md
+@Rich Harris.md
+
 ```
 
 And then the inserted link would look like:
 
 ```
+
 [[People/@Rich Hickey.md|@Rich Hickey]]
 or if explicit link is disabled
 [[@Rich Hickey]]
+
 ```
 
 #### Per Person
@@ -107,19 +131,23 @@ This setting will create a directory per person. You can use it to store multipl
 Example:
 
 ```
+
 People/
-	@Rich Hickey/
-		@Rich Hickey.md
-		more-files.md
-	@Rich Harris/
-		@Rich Harris.md
-		more-files.md
+@Rich Hickey/
+@Rich Hickey.md
+more-files.md
+@Rich Harris/
+@Rich Harris.md
+more-files.md
+
 ```
 
 And then the inserted link would look like:
 
 ```
+
 [[People/@Rich Hickey/@Rich Hickey.md|@Rich Hickey]]
+
 ```
 
 #### Per Lastname
@@ -129,17 +157,21 @@ This setting will create a directory per lastname and a single file for the pers
 Example:
 
 ```
+
 People/
-	Hickey/
-		@Rich Hickey.md
-	Harris/
-		@Rich Harris.md
+Hickey/
+@Rich Hickey.md
+Harris/
+@Rich Harris.md
+
 ```
 
 And then the inserted link would look like:
 
 ```
+
 [[People/Hickey/@Rich Hickey.md|@Rich Hickey]]
+
 ```
 
 > Note: figuring out what the "last name" is (or if it even has one) is really complicated! This plugin takes a very simple approach: if you split a name by the space character, it'll just pick the last "word". So for example "Charles Le Fabre" would be "Fabre" and *not* "Le Fabre".
@@ -163,21 +195,22 @@ If this setting is disabled (default), you need to manually create the person fi
 - Backlink counts are only calculated for matching results (not all people)
 - Efficient in-memory caching of person files
 
-### Smart Ranking Algorithm
+### Smart Ranking Algorithm (Updated!)
 The plugin uses a sophisticated scoring system that combines:
-- **Pattern matching score** (800-3000 points):
+- **Pattern matching score** (800-3000 base points):
   - Exact match at name start: 3000 pts
   - Match at word boundary: 2500 pts
   - Multi-word pattern match: 1500 pts
   - Word initials match: 1000 pts
   - Word start match: 800 pts
-- **Backlink boost** (0-460+ points):
-  - Logarithmic scale based on reference frequency
-  - 1 backlink ≈ 69 pts
-  - 10 backlinks ≈ 230 pts
-  - 100 backlinks ≈ 460 pts
+- **Length Penalty (New)**: All pattern scores are multiplied by a `similarityFactor` (`pattern_length / text_length`). This heavily penalizes matches that are much longer than the query, ensuring that "John" ranks higher than "Johnathan" when searching for "John".
+- **Backlink boost** (Now much more powerful):
+  - Logarithmic scale (with a `* 1000` multiplier) based on reference frequency.
+  - 1 backlink ≈ 693 pts
+  - 10 backlinks ≈ 2397 pts
+  - 100 backlinks ≈ 4615 pts
 
-This ensures frequently-used people appear higher in suggestions while maintaining relevance to your search query.
+This ensures that frequently-used people appear higher in suggestions while maintaining high relevance to your search query.
 
 ## Conflicts
 

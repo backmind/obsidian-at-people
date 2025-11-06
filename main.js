@@ -327,6 +327,18 @@ class PersonSuggestModal extends SuggestModal {
 		// Pre-populate with the selected text
 		this.inputEl.value = this.initialQuery
 		this.inputEl.select()
+
+		// Register Tab key to select the currently highlighted suggestion
+		this.scope.register([], "Tab", (evt) => {
+			// Check if there's a selected item in the suggestions
+			if (this.chooser && this.chooser.selectedItem >= 0 && this.chooser.values) {
+				const selectedSuggestion = this.chooser.values[this.chooser.selectedItem]
+				this.onChooseSuggestion(selectedSuggestion)
+				this.close()
+				return false // Prevent default Tab behavior
+			}
+			return true // Allow default Tab if no suggestion selected
+		})
 	}
 	
 	getSuggestions(query) {
@@ -380,6 +392,17 @@ class AtPeopleSuggestor extends EditorSuggest {
 	constructor(app, settings) {
 		super(app)
 		this.settings = settings
+
+		// Register Tab key to select the currently highlighted suggestion
+		this.scope.register([], "Tab", (evt) => {
+			// Check if suggestions popup is open and has a selected item
+			if (this.suggestions && this.suggestions.values && this.suggestions.selectedItem >= 0) {
+				const selectedValue = this.suggestions.values[this.suggestions.selectedItem]
+				this.selectSuggestion(selectedValue)
+				return false // Prevent default Tab behavior
+			}
+			return true // Allow default Tab if no suggestions are shown
+		})
 	}
 	
 	folderModePerPerson = () => this.settings.folderMode === "PER_PERSON"

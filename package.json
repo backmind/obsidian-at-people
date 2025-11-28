@@ -1,6 +1,6 @@
 {
   "name": "obsidian-at-people",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Use the @ to create links to people files with smart fuzzy search, accent-insensitive matching, and backlink-based ranking.",
   "main": "main.js",
   "repository": {

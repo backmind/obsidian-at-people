@@ -585,7 +585,7 @@ class AtPeopleSettingTab extends PluginSettingTab {
 				})
 			)
 		new Setting(containerEl)
-			.setName('Folder Mode')
+			.setName('Folder mode')
 			.setDesc(multiLineDesc([
 			"Default - Creates a file for every person in the path defined in \"People folder\" e.g. [[People/@Bob Dole|@Bob Dole]]",
 			"",
@@ -596,8 +596,8 @@ class AtPeopleSettingTab extends PluginSettingTab {
 			.addDropdown(
 				dropdown => {
 					dropdown.addOption("DEFAULT", "Default");
-					dropdown.addOption("PER_PERSON", "Per Person");
-					dropdown.addOption("PER_LASTNAME", "Per Lastname");
+					dropdown.addOption("PER_PERSON", "Per person");
+					dropdown.addOption("PER_LASTNAME", "Per lastname");
 					dropdown.setValue(this.plugin.settings.folderMode)
 					dropdown.onChange(async (value) => {
 						this.plugin.settings.folderMode = value

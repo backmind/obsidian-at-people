@@ -1,4 +1,4 @@
-# Obsidian `@People`
+# At People
 
 Obsidian plugin to add that familiar @-to-tag-someone syntax:
 

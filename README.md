@@ -216,6 +216,12 @@ This ensures that frequently-used people appear higher in suggestions while main
 
 Several plugins have conflicts with using the `@` symbol, please look at the [Github issues for plugin conflicts](https://github.com/backmind/obsidian-at-people/issues?q=is%3Aissue+conflict+) to see if yours has been resolved.
 
+## Comparison with Similar Plugins
+
+**[at-symbol-linking](https://github.com/Ebonsignori/obsidian-at-symbol-linking)** is a more general solution (145kb) that supports multiple symbols mapped to different folders (@ → People/, $ → References/), full alias support, and template-based file creation. It's ideal if you need to link multiple entity types or rely heavily on aliases.
+
+**at-people** (20kb) is specialized for linking people in a single folder with minimal configuration. It focuses on performance, accent-insensitive fuzzy matching, and backlink-based ranking. Choose this if you only need person linking with robust search.
+
 ## Contributing
 
 Contributions welcome. Open an issue first to discuss major changes.

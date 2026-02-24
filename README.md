@@ -3,7 +3,7 @@
 [![Downloads](https://img.shields.io/badge/dynamic/json?logo=obsidian&color=%23483699&label=downloads&query=%24%5B%22at-people%22%5D.downloads&url=https%3A%2F%2Fraw.githubusercontent.com%2Fobsidianmd%2Fobsidian-releases%2Fmaster%2Fcommunity-plugin-stats.json)](https://obsidian.md/plugins?id=at-people)
 [![Version](https://img.shields.io/github/manifest-json/v/backmind/obsidian-at-people?color=%23483699&logo=obsidian)](https://github.com/backmind/obsidian-at-people/releases)
 [![License](https://img.shields.io/github/license/backmind/obsidian-at-people)](./LICENSE.md)
-[![Install in Obsidian](https://img.shields.io/badge/Install%20in%20Obsidian-%23483699?logo=obsidian)](obsidian://show-plugin?id=at-people)
+[![Install in Obsidian](https://img.shields.io/badge/Install%20in%20Obsidian-%23483699?logo=obsidian)](https://obsidian.md/plugins?id=at-people)
 
 A lightweight Obsidian plugin that lets you mention people with `@`, just like you would in a chat or social media. Type `@` followed by a name, pick from the suggestions, and a wiki-link is inserted automatically.
 
@@ -26,9 +26,8 @@ A lightweight Obsidian plugin that lets you mention people with `@`, just like y
 
 ### From Community Plugins
 
-1. Open **Settings > Community plugins**
-2. Search for **"At People"**
-3. Click **Install**, then **Enable**
+1. Open [At People in the Obsidian plugin directory](https://obsidian.md/plugins?id=at-people), or go to **Settings > Community plugins** and search for **"At People"**
+2. Click **Install**, then **Enable**
 
 ### Manual
 
@@ -86,6 +85,8 @@ Per Person and Per Lastname modes require Explicit links to be enabled.
 
 When enabled, selecting a suggestion automatically creates the person file (and any necessary folders) in your configured people folder. When disabled, the plugin inserts the link but you need to create the file yourself.
 
+> **Tip**: If you use [Templater](https://github.com/SilentVoid13/Templater), you can assign a template to your people folder in Templater's settings (*Folder Templates*). Every new person file created by At People will then be pre-filled with your template automatically.
+
 ## How ranking works
 
 Results are ranked by combining two factors: how closely the query matches the name (with a slight preference for shorter, more precise matches) and how often the person is referenced across your vault. Frequently mentioned people naturally rise to the top, while still respecting the relevance of your current query.
@@ -123,4 +124,4 @@ Originally created by **[saibotsivad](https://github.com/saibotsivad/obsidian-at
 
 ## License
 
-Published under the [Very Open License](http://veryopenlicense.com/).
+Published under the [MIT License](./LICENSE.md).

@@ -621,11 +621,11 @@ class AtPeopleSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName('Folder mode')
 			.setDesc(multiLineDesc([
-			"Default - Creates a file for every person in the path defined in \"People folder\" e.g. [[People/@Bob Dole|@Bob Dole]]",
+			"Default: People/@Bob Dole.md",
+			"Per Person: People/@Bob Dole/@Bob Dole.md",
+			"Per Lastname: People/Dole/@Bob Dole.md",
 			"",
-			"Everything non-default requires \"Explicit links\" to be enabled!",
-			"Per Person - Creates a folder (and a note with the same name) for every person in the path defined in \"People folder\" e.g. [[People/@Bob Dole/@Bob Dole|@Bob Dole]]",
-			"Per Lastname - Creates a folder with the Lastname of the person in the path defined in \"People folder\" e.g. [[People/Dole/@Bob Dole|@Bob Dole]]"
+			"Non-default modes require \"Explicit links\"."
 			]))
 			.addDropdown(
 				dropdown => {

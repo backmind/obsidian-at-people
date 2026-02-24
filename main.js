@@ -5,6 +5,7 @@ const DEFAULT_SETTINGS = {
 	peopleFolder: 'People/',
 	autoCreateFiles: false,
 	requireAtPrefix: true,
+	useAliases: false,
 }
 
 // Regex to extract person name from file path
@@ -15,6 +16,11 @@ const LAST_NAME_REGEX = /([\S]+)$/
 
 // Ensure folder path ends with a trailing slash
 const normalizeFolder = (p) => p.endsWith('/') ? p : p + '/'
+
+// Max candidates to compute expensive scoring boost (backlinks + recency) for.
+// Fuzzy matching runs on all candidates (cheap), then only the top N get the
+// full boost calculation to avoid calling getBacklinksForFile on every person file.
+const BOOST_CUTOFF = 30
 
 // Helper to create multi-line descriptions in settings UI
 const multiLineDesc = (strings) => {
@@ -48,6 +54,7 @@ module.exports = class AtPeople extends Plugin {
 		this.registerEvent(this.app.vault.on('delete', async event => { await this.update(event) }))
 		this.registerEvent(this.app.vault.on('create', async event => { await this.update(event) }))
 		this.registerEvent(this.app.vault.on('rename', async (event, originalFilepath) => { await this.update(event, originalFilepath) }))
+		this.registerEvent(this.app.metadataCache.on('changed', (file) => { this.updateAliasesForFile(file) }))
 		this.addSettingTab(new AtPeopleSettingTab(this.app, this))
 		this.suggestor = new AtPeopleSuggestor(this.app, this)
 		this.registerEditorSuggest(this.suggestor)
@@ -69,6 +76,7 @@ module.exports = class AtPeople extends Plugin {
 				new PersonSuggestModal(
 					this.app,
 					this.peopleFileMap,
+					this.aliasMap,
 					this.settings,
 					selection,
 					async (personName) => {
@@ -92,25 +100,63 @@ module.exports = class AtPeople extends Plugin {
 	}
 
 	updatePeopleMap = () => {
-		this.suggestor.updatePeopleMap(this.peopleFileMap)
+		this.suggestor.updatePeopleMap(this.peopleFileMap, this.aliasMap)
+	}
+
+	// Read aliases from a person file's frontmatter cache
+	getAliasesForFile = (filepath) => {
+		const file = this.app.vault.getAbstractFileByPath(filepath)
+		const aliases = file && this.app.metadataCache.getFileCache(file)?.frontmatter?.aliases
+		return Array.isArray(aliases) ? aliases.filter(a => typeof a === 'string') : []
+	}
+
+	// Refresh aliases when a file's metadata changes (e.g. frontmatter edited)
+	updateAliasesForFile = (file) => {
+		if (!this.settings.useAliases) return
+		const name = getPersonName(file.path, this.settings)
+		if (!name) return
+		// Remove old aliases for this person
+		for (const [alias, canonical] of Object.entries(this.aliasMap || {})) {
+			if (canonical === name) delete this.aliasMap[alias]
+		}
+		// Add current aliases
+		for (const alias of this.getAliasesForFile(file.path)) {
+			this.aliasMap[alias] = name
+		}
+		this.updatePeopleMap()
 	}
 
 	// Update the people map when files are created, deleted, or renamed
 	update = async ({ path, deleted }, originalFilepath) => {
 		this.peopleFileMap = this.peopleFileMap || {}
+		this.aliasMap = this.aliasMap || {}
 		const name = getPersonName(path, this.settings)
 		let needsUpdated
 		if (name) {
 			if (deleted) {
 				delete this.peopleFileMap[name]
+				// Remove aliases for deleted person
+				for (const [alias, canonical] of Object.entries(this.aliasMap)) {
+					if (canonical === name) delete this.aliasMap[alias]
+				}
 			} else {
 				this.peopleFileMap[name] = path
+				// Refresh aliases for new/changed person file
+				if (this.settings.useAliases) {
+					for (const alias of this.getAliasesForFile(path)) {
+						this.aliasMap[alias] = name
+					}
+				}
 			}
 			needsUpdated = true
 		}
 		originalFilepath = originalFilepath && getPersonName(originalFilepath, this.settings)
 		if (originalFilepath) {
 			delete this.peopleFileMap[originalFilepath]
+			// Remove aliases for renamed-away person
+			for (const [alias, canonical] of Object.entries(this.aliasMap)) {
+				if (canonical === originalFilepath) delete this.aliasMap[alias]
+			}
 			needsUpdated = true
 		}
 		if (needsUpdated) this.updatePeopleMap()
@@ -119,9 +165,17 @@ module.exports = class AtPeople extends Plugin {
 	// Initialize the people map by scanning all files in the vault
 	initialize = () => {
 		this.peopleFileMap = {}
+		this.aliasMap = {}
 		for (const filename in this.app.vault.fileMap) {
 			const name = getPersonName(filename, this.settings)
-			if (name) this.peopleFileMap[name] = filename
+			if (name) {
+				this.peopleFileMap[name] = filename
+				if (this.settings.useAliases) {
+					for (const alias of this.getAliasesForFile(filename)) {
+						this.aliasMap[alias] = name
+					}
+				}
+			}
 		}
 		window.setTimeout(() => {
 			this.updatePeopleMap()
@@ -278,31 +332,36 @@ function fuzzyMatch(pattern, text) {
 }
 
 /**
- * Calculate boost score based on backlink count
- * Uses logarithmic scale to prevent excessive dominance while still rewarding popularity
- * Multiplier of 1000 allows heavily-referenced people to rank higher
- * 
- * Example scores:
- * - 1 backlink: ~173 pts
- * - 10 backlinks: ~600 pts
- * - 50 backlinks: ~985 pts
- * - 100 backlinks: ~1152 pts
- * - 160 backlinks: ~5081 pts (with multiplier 1000)
- * 
+ * Calculate scoring boost from backlinks and recency
+ *
+ * Backlink boost: logarithmic scale × 1000
+ * - 1 backlink: ~693 pts, 10: ~2398, 50: ~3932, 100: ~4615
+ *
+ * Recency boost: exponential decay, max ~200 pts
+ * - Today: ~200, 1 week: ~158, 1 month: ~72, 3 months: ~0
+ * Light tiebreaker — never overrides fuzzy match or backlinks
+ *
  * @param {Object} app - Obsidian app instance
  * @param {string} filepath - Path to the person file
  * @returns {number} Boost score to add to pattern matching score
  */
-function getBacklinkBoost(app, filepath) {
+function getScoringBoost(app, filepath) {
     const file = app.vault.getAbstractFileByPath(filepath);
     if (!file) return 0;
-    let backlinkCount = 0;
+
+    // Backlink boost: high multiplier so frequently-referenced people overcome length penalties
+    let backlinkBoost = 0;
     const backlinks = app.metadataCache.getBacklinksForFile(file);
     if (backlinks?.data) {
-        backlinkCount = backlinks.data.size;
+        const count = backlinks.data.size;
+        backlinkBoost = count > 0 ? Math.log(count + 1) * 1000 : 0;
     }
-    // High multiplier (1000) so frequently-referenced people can overcome length penalties
-    return backlinkCount > 0 ? Math.log(backlinkCount + 1) * 1000 : 0;
+
+    // Recency boost: exponential decay based on file modification time
+    const daysAgo = (Date.now() - file.stat.mtime) / 86400000;
+    const recencyBoost = Math.max(0, 200 * Math.exp(-daysAgo / 30));
+
+    return backlinkBoost + recencyBoost;
 }
 
 /**
@@ -310,9 +369,10 @@ function getBacklinkBoost(app, filepath) {
  * Allows converting highlighted text into a person link
  */
 class PersonSuggestModal extends SuggestModal {
-	constructor(app, peopleFileMap, settings, initialQuery, onChoose) {
+	constructor(app, peopleFileMap, aliasMap, settings, initialQuery, onChoose) {
 		super(app)
 		this.peopleFileMap = peopleFileMap
+		this.aliasMap = aliasMap
 		this.settings = settings
 		this.initialQuery = initialQuery
 		this.onChoose = onChoose
@@ -340,37 +400,56 @@ class PersonSuggestModal extends SuggestModal {
 	
 	getSuggestions(query) {
 		if (!query) query = this.initialQuery
-		
-		// Score all existing people
-		let scoredSuggestions = []
+
+		const bestByPerson = {}
+
+		// First pass: cheap fuzzy matching against names
 		for (let key in (this.peopleFileMap || {})) {
 			const score = fuzzyMatch(query, key)
 			if (score > 0) {
-				const backlinkBoost = getBacklinkBoost(this.app, this.peopleFileMap[key])
-				scoredSuggestions.push({
-					score: score + backlinkBoost,
-					type: 'existing',
-					name: key,
-				})
+				bestByPerson[key] = { score, matchedAlias: null }
 			}
 		}
 
-		// Sort by score and limit to top 20
-		scoredSuggestions.sort((a, b) => b.score - a.score)
-		let suggestions = scoredSuggestions.slice(0, 20)
-		
-		// Always include option to create new person
-		suggestions.push({
-			type: 'create',
-			name: query,
-		})
-		
+		// Also match against aliases (still cheap — just fuzzyMatch)
+		if (this.settings.useAliases) {
+			for (let alias in (this.aliasMap || {})) {
+				const canonicalName = this.aliasMap[alias]
+				if (!(this.peopleFileMap || {})[canonicalName]) continue
+				const score = fuzzyMatch(query, alias)
+				if (score > 0 && (!bestByPerson[canonicalName] || score > bestByPerson[canonicalName].score)) {
+					bestByPerson[canonicalName] = { score, matchedAlias: alias }
+				}
+			}
+		}
+
+		// Sort by fuzzy score, take top N for expensive boost calculation
+		let fuzzyResults = Object.entries(bestByPerson).map(([name, data]) => ({ name, ...data }))
+		fuzzyResults.sort((a, b) => b.score - a.score)
+		const topCandidates = fuzzyResults.slice(0, BOOST_CUTOFF)
+
+		// Second pass: add scoring boost (backlinks + recency) only for top candidates
+		for (const candidate of topCandidates) {
+			candidate.score += getScoringBoost(this.app, this.peopleFileMap[candidate.name])
+		}
+
+		// Re-sort with boost and take final 20
+		topCandidates.sort((a, b) => b.score - a.score)
+		let suggestions = topCandidates.slice(0, 20).map(s => ({
+			type: 'existing',
+			name: s.name,
+			matchedAlias: s.matchedAlias,
+		}))
+
+		suggestions.push({ type: 'create', name: query })
 		return suggestions
 	}
-	
+
 	renderSuggestion(suggestion, el) {
 		if (suggestion.type === 'create') {
 			el.createEl('div', { text: 'New person: ' + suggestion.name })
+		} else if (suggestion.matchedAlias) {
+			el.createEl('div', { text: suggestion.name + ' (via ' + suggestion.matchedAlias + ')' })
 		} else {
 			el.createEl('div', { text: suggestion.name })
 		}
@@ -419,8 +498,9 @@ class AtPeopleSuggestor extends EditorSuggest {
 		super.close()
 	}
 
-	updatePeopleMap(peopleFileMap) {
+	updatePeopleMap(peopleFileMap, aliasMap) {
 		this.peopleFileMap = peopleFileMap
+		this.aliasMap = aliasMap
 	}
 	
 	/**
@@ -465,42 +545,59 @@ class AtPeopleSuggestor extends EditorSuggest {
 	
 	/**
 	 * Get suggestions based on the current query
-	 * Combines pattern matching score with backlink boost
-	 * Returns top 20 results plus option to create new person
+	 * Two-pass approach: cheap fuzzy matching first, then expensive scoring boost
+	 * only for top candidates. This avoids calling getBacklinksForFile on every
+	 * person file on every keystroke.
 	 */
 	getSuggestions(context) {
-		let scoredSuggestions = []
+		const bestByPerson = {}
+
+		// First pass: cheap fuzzy matching against names
 		for (let key in (this.peopleFileMap || {})) {
 			const score = fuzzyMatch(context.query, key)
 			if (score > 0) {
-				const backlinkBoost = getBacklinkBoost(this.app, this.peopleFileMap[key])
-				scoredSuggestions.push({
-					score: score + backlinkBoost,
-					suggestionType: 'set',
-					displayText: key,
-					context,
-				})
+				bestByPerson[key] = { score, matchedAlias: null }
 			}
 		}
 
-		scoredSuggestions.sort((a, b) => b.score - a.score)
-		let suggestions = scoredSuggestions.slice(0, 20).map(s => ({
-			suggestionType: s.suggestionType,
-			displayText: s.displayText,
-			context: s.context,
+		// Also match against aliases (still cheap — just fuzzyMatch)
+		if (this.plugin.settings.useAliases) {
+			for (let alias in (this.aliasMap || {})) {
+				const canonicalName = this.aliasMap[alias]
+				if (!(this.peopleFileMap || {})[canonicalName]) continue
+				const score = fuzzyMatch(context.query, alias)
+				if (score > 0 && (!bestByPerson[canonicalName] || score > bestByPerson[canonicalName].score)) {
+					bestByPerson[canonicalName] = { score, matchedAlias: alias }
+				}
+			}
+		}
+
+		// Sort by fuzzy score, take top N for expensive boost calculation
+		let fuzzyResults = Object.entries(bestByPerson).map(([name, data]) => ({ name, ...data }))
+		fuzzyResults.sort((a, b) => b.score - a.score)
+		const topCandidates = fuzzyResults.slice(0, BOOST_CUTOFF)
+
+		// Second pass: add scoring boost (backlinks + recency) only for top candidates
+		for (const candidate of topCandidates) {
+			candidate.score += getScoringBoost(this.app, this.peopleFileMap[candidate.name])
+		}
+
+		// Re-sort with boost and take final 20
+		topCandidates.sort((a, b) => b.score - a.score)
+		let suggestions = topCandidates.slice(0, 20).map(s => ({
+			suggestionType: 'set',
+			displayText: s.name,
+			matchedAlias: s.matchedAlias,
+			context,
 		}))
 
-		suggestions.push({
-			suggestionType: 'create',
-			displayText: context.query,
-			context,
-		})
-		
+		suggestions.push({ suggestionType: 'create', displayText: context.query, context })
 		return suggestions
 	}
-	
+
 	renderSuggestion(value, elem) {
 		if (value.suggestionType === 'create') elem.setText('New person: ' + value.displayText)
+		else if (value.matchedAlias) elem.setText(value.displayText + ' (via ' + value.matchedAlias + ')')
 		else elem.setText(value.displayText)
 	}
 	
@@ -624,6 +721,18 @@ class AtPeopleSettingTab extends PluginSettingTab {
 						this.plugin.initialize()
 					})
 				}
+			)
+		new Setting(containerEl)
+			.setName('Include aliases')
+			.setDesc('Match people by their frontmatter aliases (e.g. nicknames). Aliases must be defined in the YAML frontmatter of each person file.')
+			.addToggle(
+				toggle => toggle
+				.setValue(this.plugin.settings.useAliases)
+				.onChange(async (value) => {
+					this.plugin.settings.useAliases = value
+					await this.plugin.saveSettings()
+					this.plugin.initialize()
+				})
 			)
 		new Setting(containerEl)
 			.setName('Require @ prefix (default: enabled)')

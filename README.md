@@ -16,7 +16,8 @@ A lightweight Obsidian plugin that lets you mention people with `@`, just like y
   - `"jose"` matches **José García**
   - `"jd"` matches **John Doe** (initials)
   - `"doe jo"` matches **John Doe** (multi-word)
-- **Backlink-based ranking** — people you reference often appear higher in suggestions
+- **Frontmatter aliases** — match people by nicknames or alternate names defined in their YAML frontmatter (opt-in)
+- **Backlink-based ranking** — people you reference often appear higher in suggestions, with a slight recency boost for recently edited notes
 - **Link selected text** — select any text, run the command **"At-People: Link selected text to person"** from the palette, and convert it into a person link instantly. Assign a hotkey (e.g. `Ctrl+Shift+A`) for even faster linking.
 - **Dismiss with Escape** — press `Esc` to dismiss suggestions; they won't reappear until you type a new `@`
 - **Auto-create files** — optionally create person files and folders on the fly when selecting a suggestion
@@ -91,13 +92,27 @@ Per Person and Per Lastname modes require Explicit links to be enabled.
 
 > **Note on last names**: the plugin takes the last word of the name as the last name. "Charles Le Fabre" becomes "Fabre", not "Le Fabre".
 
+### Include aliases
+
+Disabled by default. When enabled, the plugin reads the `aliases` field from each person file's YAML frontmatter and includes them in the search. For example, if `@María García.md` contains:
+
+```yaml
+---
+aliases:
+  - Mary
+  - mamá
+---
+```
+
+Typing `@Mary` or `@mamá` will suggest **María García**. The suggestion shows the matched alias so you know why it appeared (e.g. `María García (via Mary)`). The inserted link always points to the canonical person name.
+
 ### Require @ prefix
 
 Enabled by default. When enabled, only files starting with `@` are recognized as people. When disabled, all `.md` files in the people folder are treated as people. See [file naming](#important-file-naming) for details.
 
 ## How ranking works
 
-Results are ranked by combining two factors: how closely the query matches the name (with a slight preference for shorter, more precise matches) and how often the person is referenced across your vault. Frequently mentioned people naturally rise to the top, while still respecting the relevance of your current query.
+Results are ranked by combining three factors: how closely the query matches the name (with a slight preference for shorter, more precise matches), how often the person is referenced across your vault, and a light recency boost for recently edited person notes. Frequently mentioned people naturally rise to the top, while still respecting the relevance of your current query.
 
 ## Conflicts
 
@@ -107,15 +122,15 @@ Some plugins conflict with the `@` symbol. Check the [known plugin conflicts](ht
 
 | | **At People** | **[At Symbol Linking](https://github.com/Ebonsignori/obsidian-at-symbol-linking)** |
 |---|---|---|
-| Size | ~20 KB | ~145 KB |
+| Size | ~25 KB | ~145 KB |
 | Focus | People only | Multiple entity types |
 | Multi-symbol support | `@` only | `@`, `$`, etc. mapped to different folders |
-| Alias support | No | Yes |
+| Alias support | Yes (frontmatter) | Yes |
 | Fuzzy search | Accent-insensitive, multi-word, initials | Standard |
 | Backlink ranking | Yes | No |
 | File templates | No | Yes |
 
-Choose **At People** if you want a fast, focused solution for person linking. Choose **At Symbol Linking** if you need broader symbol-to-folder mapping or alias support.
+Choose **At People** if you want a fast, focused solution for person linking. Choose **At Symbol Linking** if you need broader symbol-to-folder mapping.
 
 ## Contributing
 

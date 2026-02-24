@@ -1,15 +1,20 @@
-const { App, Editor, EditorSuggest, SuggestModal, TFile, Notice, Plugin, PluginSettingTab, Setting } = require('obsidian')
+const { AbstractInputSuggest, EditorSuggest, SuggestModal, Notice, Plugin, PluginSettingTab, Setting } = require('obsidian')
 
 // Default plugin configuration
 const DEFAULT_SETTINGS = {
 	peopleFolder: 'People/',
 	autoCreateFiles: false,
+	requireAtPrefix: true,
 }
 
-// Regex to extract person name from file path (e.g., "People/@John Doe.md" -> "John Doe")
-const NAME_REGEX = /\/@([^\/]+)\.md$/
+// Regex to extract person name from file path
+const NAME_REGEX_AT = /\/@([^\/]+)\.md$/     // With @ prefix: "People/@John Doe.md" -> "John Doe"
+const NAME_REGEX_NO_AT = /\/([^\/]+)\.md$/   // Without @ prefix: "People/John Doe.md" -> "John Doe"
 // Regex to extract last name (last word after splitting by spaces)
 const LAST_NAME_REGEX = /([\S]+)$/
+
+// Ensure folder path ends with a trailing slash
+const normalizeFolder = (p) => p.endsWith('/') ? p : p + '/'
 
 // Helper to create multi-line descriptions in settings UI
 const multiLineDesc = (strings) => {
@@ -24,10 +29,18 @@ const multiLineDesc = (strings) => {
 }
 
 // Check if a file path represents a person file based on plugin settings
-const getPersonName = (filename, settings) => filename.startsWith(settings.peopleFolder)
-	&& filename.endsWith('.md')
-	&& filename.includes('/@')
-	&& NAME_REGEX.exec(filename)?.[1]
+const getPersonName = (filename, settings) => {
+	if (!filename.startsWith(settings.peopleFolder) || !filename.endsWith('.md')) return false
+	if (settings.requireAtPrefix) {
+		return filename.includes('/@') && NAME_REGEX_AT.exec(filename)?.[1]
+	}
+	// Without @ requirement: any .md in the people folder tree is a person
+	// Still strip @ prefix from name if present for consistency
+	const match = NAME_REGEX_NO_AT.exec(filename)
+	if (!match) return false
+	const name = match[1]
+	return name.startsWith('@') ? name.slice(1) : name
+}
 
 module.exports = class AtPeople extends Plugin {
 	async onload() {
@@ -36,7 +49,7 @@ module.exports = class AtPeople extends Plugin {
 		this.registerEvent(this.app.vault.on('create', async event => { await this.update(event) }))
 		this.registerEvent(this.app.vault.on('rename', async (event, originalFilepath) => { await this.update(event, originalFilepath) }))
 		this.addSettingTab(new AtPeopleSettingTab(this.app, this))
-		this.suggestor = new AtPeopleSuggestor(this.app, this.settings)
+		this.suggestor = new AtPeopleSuggestor(this.app, this)
 		this.registerEditorSuggest(this.suggestor)
 		
 		// Command to convert selected text into a person link
@@ -71,7 +84,7 @@ module.exports = class AtPeople extends Plugin {
 
 	async loadSettings() {
 		const storedSettings = await this.loadData()
-		this.settings = await Object.assign({}, DEFAULT_SETTINGS, storedSettings)
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, storedSettings)
 	}
 
 	async saveSettings() {
@@ -83,12 +96,16 @@ module.exports = class AtPeople extends Plugin {
 	}
 
 	// Update the people map when files are created, deleted, or renamed
-	update = async ({ path, deleted, ...remaining }, originalFilepath) => {
+	update = async ({ path, deleted }, originalFilepath) => {
 		this.peopleFileMap = this.peopleFileMap || {}
 		const name = getPersonName(path, this.settings)
 		let needsUpdated
 		if (name) {
-			this.peopleFileMap[name] = path
+			if (deleted) {
+				delete this.peopleFileMap[name]
+			} else {
+				this.peopleFileMap[name] = path
+			}
 			needsUpdated = true
 		}
 		originalFilepath = originalFilepath && getPersonName(originalFilepath, this.settings)
@@ -114,21 +131,20 @@ module.exports = class AtPeople extends Plugin {
 	// Shared logic to create links to people
 	// Handles different folder modes (default, per-person, per-lastname)
 	async createPersonLink(display) {
-		const normalizeFolder = (p) => p.endsWith('/') ? p : p + '/'
 		const lastNameMatch = LAST_NAME_REGEX.exec(display)
 		const lastName = lastNameMatch && lastNameMatch[1] ? lastNameMatch[1] : ''
-		const filename = `@${display}.md`
+		const atPrefix = this.settings.requireAtPrefix ? '@' : ''
+		const filename = `${atPrefix}${display}.md`
+		const displayName = this.settings.requireAtPrefix ? `@${display}` : display
 
 		// Determine target folder and file path based on folder mode
 		let targetFolder = normalizeFolder(this.settings.peopleFolder)
 		let filePath = targetFolder + filename
 
 		if (this.settings.folderMode === "PER_PERSON") {
-			// Creates: People/@John Doe/@John Doe.md
-			targetFolder = normalizeFolder(this.settings.peopleFolder) + `@${display}/`
+			targetFolder = normalizeFolder(this.settings.peopleFolder) + `${atPrefix}${display}/`
 			filePath = targetFolder + filename
 		} else if (this.settings.folderMode === "PER_LASTNAME") {
-			// Creates: People/Doe/@John Doe.md
 			targetFolder = normalizeFolder(this.settings.peopleFolder) + (lastName ? lastName + '/' : '')
 			filePath = targetFolder + filename
 		}
@@ -136,38 +152,19 @@ module.exports = class AtPeople extends Plugin {
 		// Auto-create folders and files if enabled
 		if (this.settings.autoCreateFiles) {
 			const folderToCreate = targetFolder.replace(/\/$/, '')
-			if (!this.app.vault.getAbstractFileByPath(folderToCreate)) {
-				try {
-					await this.app.vault.createFolder(folderToCreate)
-				} catch (e) {
-					console.warn('Could not create folder', folderToCreate, e)
-				}
-			}
-
-			if (!this.app.vault.getAbstractFileByPath(filePath)) {
-				try {
-					await this.app.vault.create(filePath, '')
-				} catch (e) {
-					console.warn('Could not create file', filePath, e)
-				}
-			}
+			try { await this.app.vault.createFolder(folderToCreate) } catch (e) { /* exists */ }
+			try { await this.app.vault.create(filePath, '') } catch (e) { /* exists */ }
 		}
 
 		// Generate the appropriate link format
 		let link
-		if (this.settings.folderMode === "PER_PERSON" && this.settings.useExplicitLinks) {
-			link = `[[${filePath}|@${display}]]`
-		}
-		else if (this.settings.useExplicitLinks && this.settings.folderMode === "PER_LASTNAME") {
-			link = `[[${filePath}|@${display}]]`
-		}
-		else if (this.settings.useExplicitLinks) {
-			link = `[[${filePath}|@${display}]]`
+		if (this.settings.useExplicitLinks) {
+			link = `[[${filePath}|${displayName}]]`
 		}
 		else {
-			link = `[[@${display}]]`
+			link = `[[${displayName}]]`
 		}
-		
+
 		return link
 	}
 }
@@ -299,11 +296,11 @@ function fuzzyMatch(pattern, text) {
 function getBacklinkBoost(app, filepath) {
     const file = app.vault.getAbstractFileByPath(filepath);
     if (!file) return 0;
-	let backlinkCount = 0;
-	const backlinks = app.metadataCache.getBacklinksForFile(file);
-        if (backlinks?.data) {
-                backlinkCount = backlinks.data.size;
-		}
+    let backlinkCount = 0;
+    const backlinks = app.metadataCache.getBacklinksForFile(file);
+    if (backlinks?.data) {
+        backlinkCount = backlinks.data.size;
+    }
     // High multiplier (1000) so frequently-referenced people can overcome length penalties
     return backlinkCount > 0 ? Math.log(backlinkCount + 1) * 1000 : 0;
 }
@@ -389,9 +386,10 @@ class PersonSuggestModal extends SuggestModal {
  * Triggers when user types '@' followed by text
  */
 class AtPeopleSuggestor extends EditorSuggest {
-	constructor(app, settings) {
+	constructor(app, plugin) {
 		super(app)
-		this.settings = settings
+		this.plugin = plugin
+		this.settings = plugin.settings
 		this.dismissedTrigger = null
 
 		// Register Tab key to select the currently highlighted suggestion
@@ -421,9 +419,6 @@ class AtPeopleSuggestor extends EditorSuggest {
 		super.close()
 	}
 
-	folderModePerPerson = () => this.settings.folderMode === "PER_PERSON"
-	folderModePerLastname = () => this.settings.folderMode === "PER_LASTNAME"
-	
 	updatePeopleMap(peopleFileMap) {
 		this.peopleFileMap = peopleFileMap
 	}
@@ -511,66 +506,12 @@ class AtPeopleSuggestor extends EditorSuggest {
 	
 	/**
 	 * Handle selection of a suggestion
-	 * Creates the appropriate link format based on settings
-	 * Auto-creates files and folders if enabled
+	 * Delegates link creation to the plugin's shared createPersonLink method
 	 */
 	async selectSuggestion(value) {
 		this._selectionMade = true
 		this.dismissedTrigger = null
-		const display = value.displayText
-		const normalizeFolder = (p) => p.endsWith('/') ? p : p + '/'
-		const lastNameMatch = LAST_NAME_REGEX.exec(display)
-		const lastName = lastNameMatch && lastNameMatch[1] ? lastNameMatch[1] : ''
-		const filename = `@${display}.md`
-
-		// Determine target folder and file path based on folder mode
-		let targetFolder = normalizeFolder(this.settings.peopleFolder)
-		let filePath = targetFolder + filename
-
-		if (this.folderModePerPerson()) {
-			// Creates: People/@John Doe/@John Doe.md
-			targetFolder = normalizeFolder(this.settings.peopleFolder) + `@${display}/`
-			filePath = targetFolder + filename
-		} else if (this.folderModePerLastname()) {
-			// Creates: People/Doe/@John Doe.md
-			targetFolder = normalizeFolder(this.settings.peopleFolder) + (lastName ? lastName + '/' : '')
-			filePath = targetFolder + filename
-		}
-
-		// Auto-create folders and files if enabled
-		if (this.settings.autoCreateFiles) {
-			const folderToCreate = targetFolder.replace(/\/$/, '')
-			if (!this.app.vault.getAbstractFileByPath(folderToCreate)) {
-				try {
-					await this.app.vault.createFolder(folderToCreate)
-				} catch (e) {
-					console.warn('Could not create folder', folderToCreate, e)
-				}
-			}
-
-			if (!this.app.vault.getAbstractFileByPath(filePath)) {
-				try {
-					await this.app.vault.create(filePath, '')
-				} catch (e) {
-					console.warn('Could not create file', filePath, e)
-				}
-			}
-		}
-
-		// Generate the appropriate link format
-		let link
-		if (this.folderModePerPerson() && this.settings.useExplicitLinks) {
-			link = `[[${filePath}|@${display}]]`
-		}
-		else if (this.settings.useExplicitLinks && this.folderModePerLastname()) {
-			link = `[[${filePath}|@${display}]]`
-		}
-		else if (this.settings.useExplicitLinks && !this.folderModePerLastname()) {
-			link = `[[${filePath}|@${display}]]`
-		}
-		else {
-			link = `[[@${display}]]`
-		}
+		const link = await this.plugin.createPersonLink(value.displayText)
 
 		// Replace the '@query' text with the generated link
 		value.context.editor.replaceRange(
@@ -578,6 +519,34 @@ class AtPeopleSuggestor extends EditorSuggest {
 			value.context.start,
 			value.context.end,
 		)
+	}
+}
+
+/**
+ * Folder autocomplete for settings input
+ * Shows existing vault folders as suggestions while typing
+ */
+class FolderSuggest extends AbstractInputSuggest {
+	constructor(app, inputEl, onChangeCb) {
+		super(app, inputEl)
+		this.textInputEl = inputEl
+		this.onChangeCb = onChangeCb
+	}
+
+	getSuggestions(inputStr) {
+		const inputLower = inputStr.toLowerCase()
+		const folders = this.app.vault.getAllFolders().map(f => f.path + '/')
+		return folders.filter(folder => folder.toLowerCase().includes(inputLower))
+	}
+
+	renderSuggestion(folder, el) {
+		el.createEl('div', { text: folder })
+	}
+
+	selectSuggestion(folder, evt) {
+		this.textInputEl.value = folder
+		this.close()
+		this.onChangeCb(folder)
 	}
 }
 
@@ -593,22 +562,26 @@ class AtPeopleSettingTab extends PluginSettingTab {
 	display() {
 		const { containerEl } = this
 		containerEl.empty()
+		containerEl.createEl('h2', { text: 'At People Settings' })
 		new Setting(containerEl)
 			.setName('People folder')
-			.setDesc('The folder where people files live, e.g. "People/". (With trailing slash.)')
-			.addText(
-				text => text
+			.setDesc('The folder where people files live.')
+			.addSearch(search => {
+				const handleChange = async (value) => {
+					this.plugin.settings.peopleFolder = value
+					await this.plugin.saveSettings()
+					this.plugin.initialize()
+				}
+				search
 					.setPlaceholder(DEFAULT_SETTINGS.peopleFolder)
 					.setValue(this.plugin.settings.peopleFolder)
-					.onChange(async (value) => {
-						this.plugin.settings.peopleFolder = value
-						await this.plugin.saveSettings()
-						this.plugin.initialize()
-					})
-			)
+					.onChange(handleChange)
+				new FolderSuggest(this.app, search.inputEl, handleChange)
+				search.inputEl.blur()
+			})
 		new Setting(containerEl)
 			.setName('Explicit links')
-			.setDesc('When inserting links include the full path, e.g. [[People/@Bob Dole.md|@Bob Dole]]')
+			.setDesc('When inserting links include the full path, e.g. [[People/@John Doe.md|@John Doe]]')
 			.addToggle(
 				toggle => toggle
 				.setValue(this.plugin.settings.useExplicitLinks)
@@ -619,11 +592,23 @@ class AtPeopleSettingTab extends PluginSettingTab {
 				})
 			)
 		new Setting(containerEl)
+			.setName('Auto-create files')
+			.setDesc('Automatically create person files and folders when selecting a person suggestion')
+			.addToggle(
+				toggle => toggle
+				.setValue(this.plugin.settings.autoCreateFiles)
+				.onChange(async (value) => {
+					this.plugin.settings.autoCreateFiles = value
+					await this.plugin.saveSettings()
+				})
+			)
+		new Setting(containerEl)
 			.setName('Folder mode')
 			.setDesc(multiLineDesc([
-			"Default: People/@Bob Dole.md",
-			"Per Person: People/@Bob Dole/@Bob Dole.md",
-			"Per Lastname: People/Dole/@Bob Dole.md",
+			"Default: People/@John Doe.md",
+			"Per Person: People/@John Doe/@John Doe.md",
+			"Per Lastname: People/Doe/@John Doe.md",
+			"Paths reflect the \"Require @ prefix\" setting.",
 			"",
 			"Non-default modes require \"Explicit links\"."
 			]))
@@ -641,14 +626,20 @@ class AtPeopleSettingTab extends PluginSettingTab {
 				}
 			)
 		new Setting(containerEl)
-			.setName('Auto-create files')
-			.setDesc('Automatically create person files and folders when selecting a person suggestion')
+			.setName('Require @ prefix (default: enabled)')
+			.setDesc(multiLineDesc([
+			"When enabled, only files starting with @ are recognized as people (e.g. @John Doe.md).",
+			"When disabled, all .md files in the people folder are treated as people.",
+			"",
+			"Warning: if disabled, make sure your people folder only contains person files."
+			]))
 			.addToggle(
 				toggle => toggle
-				.setValue(this.plugin.settings.autoCreateFiles)
+				.setValue(this.plugin.settings.requireAtPrefix)
 				.onChange(async (value) => {
-					this.plugin.settings.autoCreateFiles = value
+					this.plugin.settings.requireAtPrefix = value
 					await this.plugin.saveSettings()
+					this.plugin.initialize()
 				})
 			)
 	}

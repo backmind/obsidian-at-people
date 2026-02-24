@@ -37,7 +37,7 @@ A lightweight Obsidian plugin that lets you mention people with `@`, just like y
 
 ## Important: file naming
 
-Person files **must** start with `@` in their filename. For example:
+By default, person files must start with `@` in their filename:
 
 ```
 People/
@@ -45,15 +45,19 @@ People/
   @Sarah Connor.md
 ```
 
-Without the `@` prefix, the plugin won't recognize a file as a person. This is by design — it clearly distinguishes person notes from regular notes in your vault.
+The `@` prefix clearly distinguishes person notes from regular notes in your vault.
+
+If your people files don't use `@` (e.g. you already have a folder of contacts named `John Doe.md`), you can disable **Require @ prefix** in settings. The plugin will then treat every `.md` file inside your people folder — including subfolders — as a person.
+
+> **Warning:** with the prefix disabled, make sure your people folder contains only person files. Any `.md` file in it will appear in suggestions.
 
 ## Configuration
 
 ### People folder
 
-Set the folder where your person files live (e.g. `People/`, `Contacts/`, `Reference/People/`). The plugin scans this folder for files starting with `@`.
+Set the folder where your person files live (e.g. `People/`, `Contacts/`, `Reference/People/`). The plugin scans this folder and all subfolders for person files.
 
-### Link format
+### Explicit links
 
 By default, the plugin inserts simple links:
 
@@ -66,6 +70,12 @@ Enable **Explicit links** to include the full path:
 ```
 [[People/@John Doe.md|@John Doe]]
 ```
+
+### Auto-create files
+
+When enabled, selecting a suggestion automatically creates the person file (and any necessary folders) in your configured people folder. When disabled, the plugin inserts the link but you need to create the file yourself.
+
+> **Tip**: If you use [Templater](https://github.com/SilentVoid13/Templater), you can assign a template to your people folder in Templater's settings (*Folder Templates*). Every new person file created by At People will then be pre-filled with your template automatically.
 
 ### Folder mode
 
@@ -81,11 +91,9 @@ Per Person and Per Lastname modes require Explicit links to be enabled.
 
 > **Note on last names**: the plugin takes the last word of the name as the last name. "Charles Le Fabre" becomes "Fabre", not "Le Fabre".
 
-### Auto-create files
+### Require @ prefix
 
-When enabled, selecting a suggestion automatically creates the person file (and any necessary folders) in your configured people folder. When disabled, the plugin inserts the link but you need to create the file yourself.
-
-> **Tip**: If you use [Templater](https://github.com/SilentVoid13/Templater), you can assign a template to your people folder in Templater's settings (*Folder Templates*). Every new person file created by At People will then be pre-filled with your template automatically.
+Enabled by default. When enabled, only files starting with `@` are recognized as people. When disabled, all `.md` files in the people folder are treated as people. See [file naming](#important-file-naming) for details.
 
 ## How ranking works
 

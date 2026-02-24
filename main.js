@@ -1,15 +1,26 @@
-const { App, Editor, EditorSuggest, SuggestModal, TFile, Notice, Plugin, PluginSettingTab, Setting } = require('obsidian')
+const { AbstractInputSuggest, EditorSuggest, SuggestModal, Notice, Plugin, PluginSettingTab, Setting } = require('obsidian')
 
 // Default plugin configuration
 const DEFAULT_SETTINGS = {
 	peopleFolder: 'People/',
 	autoCreateFiles: false,
+	requireAtPrefix: true,
+	useAliases: false,
 }
 
-// Regex to extract person name from file path (e.g., "People/@John Doe.md" -> "John Doe")
-const NAME_REGEX = /\/@([^\/]+)\.md$/
+// Regex to extract person name from file path
+const NAME_REGEX_AT = /\/@([^\/]+)\.md$/     // With @ prefix: "People/@John Doe.md" -> "John Doe"
+const NAME_REGEX_NO_AT = /\/([^\/]+)\.md$/   // Without @ prefix: "People/John Doe.md" -> "John Doe"
 // Regex to extract last name (last word after splitting by spaces)
 const LAST_NAME_REGEX = /([\S]+)$/
+
+// Ensure folder path ends with a trailing slash
+const normalizeFolder = (p) => p.endsWith('/') ? p : p + '/'
+
+// Max candidates to compute expensive scoring boost (backlinks + recency) for.
+// Fuzzy matching runs on all candidates (cheap), then only the top N get the
+// full boost calculation to avoid calling getBacklinksForFile on every person file.
+const BOOST_CUTOFF = 30
 
 // Helper to create multi-line descriptions in settings UI
 const multiLineDesc = (strings) => {
@@ -24,10 +35,18 @@ const multiLineDesc = (strings) => {
 }
 
 // Check if a file path represents a person file based on plugin settings
-const getPersonName = (filename, settings) => filename.startsWith(settings.peopleFolder)
-	&& filename.endsWith('.md')
-	&& filename.includes('/@')
-	&& NAME_REGEX.exec(filename)?.[1]
+const getPersonName = (filename, settings) => {
+	if (!filename.startsWith(settings.peopleFolder) || !filename.endsWith('.md')) return false
+	if (settings.requireAtPrefix) {
+		return filename.includes('/@') && NAME_REGEX_AT.exec(filename)?.[1]
+	}
+	// Without @ requirement: any .md in the people folder tree is a person
+	// Still strip @ prefix from name if present for consistency
+	const match = NAME_REGEX_NO_AT.exec(filename)
+	if (!match) return false
+	const name = match[1]
+	return name.startsWith('@') ? name.slice(1) : name
+}
 
 module.exports = class AtPeople extends Plugin {
 	async onload() {
@@ -35,8 +54,9 @@ module.exports = class AtPeople extends Plugin {
 		this.registerEvent(this.app.vault.on('delete', async event => { await this.update(event) }))
 		this.registerEvent(this.app.vault.on('create', async event => { await this.update(event) }))
 		this.registerEvent(this.app.vault.on('rename', async (event, originalFilepath) => { await this.update(event, originalFilepath) }))
+		this.registerEvent(this.app.metadataCache.on('changed', (file) => { this.updateAliasesForFile(file) }))
 		this.addSettingTab(new AtPeopleSettingTab(this.app, this))
-		this.suggestor = new AtPeopleSuggestor(this.app, this.settings)
+		this.suggestor = new AtPeopleSuggestor(this.app, this)
 		this.registerEditorSuggest(this.suggestor)
 		
 		// Command to convert selected text into a person link
@@ -56,6 +76,7 @@ module.exports = class AtPeople extends Plugin {
 				new PersonSuggestModal(
 					this.app,
 					this.peopleFileMap,
+					this.aliasMap,
 					this.settings,
 					selection,
 					async (personName) => {
@@ -71,7 +92,7 @@ module.exports = class AtPeople extends Plugin {
 
 	async loadSettings() {
 		const storedSettings = await this.loadData()
-		this.settings = await Object.assign({}, DEFAULT_SETTINGS, storedSettings)
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, storedSettings)
 	}
 
 	async saveSettings() {
@@ -79,21 +100,63 @@ module.exports = class AtPeople extends Plugin {
 	}
 
 	updatePeopleMap = () => {
-		this.suggestor.updatePeopleMap(this.peopleFileMap)
+		this.suggestor.updatePeopleMap(this.peopleFileMap, this.aliasMap)
+	}
+
+	// Read aliases from a person file's frontmatter cache
+	getAliasesForFile = (filepath) => {
+		const file = this.app.vault.getAbstractFileByPath(filepath)
+		const aliases = file && this.app.metadataCache.getFileCache(file)?.frontmatter?.aliases
+		return Array.isArray(aliases) ? aliases.filter(a => typeof a === 'string') : []
+	}
+
+	// Refresh aliases when a file's metadata changes (e.g. frontmatter edited)
+	updateAliasesForFile = (file) => {
+		if (!this.settings.useAliases) return
+		const name = getPersonName(file.path, this.settings)
+		if (!name) return
+		// Remove old aliases for this person
+		for (const [alias, canonical] of Object.entries(this.aliasMap || {})) {
+			if (canonical === name) delete this.aliasMap[alias]
+		}
+		// Add current aliases
+		for (const alias of this.getAliasesForFile(file.path)) {
+			this.aliasMap[alias] = name
+		}
+		this.updatePeopleMap()
 	}
 
 	// Update the people map when files are created, deleted, or renamed
-	update = async ({ path, deleted, ...remaining }, originalFilepath) => {
+	update = async ({ path, deleted }, originalFilepath) => {
 		this.peopleFileMap = this.peopleFileMap || {}
+		this.aliasMap = this.aliasMap || {}
 		const name = getPersonName(path, this.settings)
 		let needsUpdated
 		if (name) {
-			this.peopleFileMap[name] = path
+			if (deleted) {
+				delete this.peopleFileMap[name]
+				// Remove aliases for deleted person
+				for (const [alias, canonical] of Object.entries(this.aliasMap)) {
+					if (canonical === name) delete this.aliasMap[alias]
+				}
+			} else {
+				this.peopleFileMap[name] = path
+				// Refresh aliases for new/changed person file
+				if (this.settings.useAliases) {
+					for (const alias of this.getAliasesForFile(path)) {
+						this.aliasMap[alias] = name
+					}
+				}
+			}
 			needsUpdated = true
 		}
 		originalFilepath = originalFilepath && getPersonName(originalFilepath, this.settings)
 		if (originalFilepath) {
 			delete this.peopleFileMap[originalFilepath]
+			// Remove aliases for renamed-away person
+			for (const [alias, canonical] of Object.entries(this.aliasMap)) {
+				if (canonical === originalFilepath) delete this.aliasMap[alias]
+			}
 			needsUpdated = true
 		}
 		if (needsUpdated) this.updatePeopleMap()
@@ -102,9 +165,17 @@ module.exports = class AtPeople extends Plugin {
 	// Initialize the people map by scanning all files in the vault
 	initialize = () => {
 		this.peopleFileMap = {}
+		this.aliasMap = {}
 		for (const filename in this.app.vault.fileMap) {
 			const name = getPersonName(filename, this.settings)
-			if (name) this.peopleFileMap[name] = filename
+			if (name) {
+				this.peopleFileMap[name] = filename
+				if (this.settings.useAliases) {
+					for (const alias of this.getAliasesForFile(filename)) {
+						this.aliasMap[alias] = name
+					}
+				}
+			}
 		}
 		window.setTimeout(() => {
 			this.updatePeopleMap()
@@ -114,21 +185,20 @@ module.exports = class AtPeople extends Plugin {
 	// Shared logic to create links to people
 	// Handles different folder modes (default, per-person, per-lastname)
 	async createPersonLink(display) {
-		const normalizeFolder = (p) => p.endsWith('/') ? p : p + '/'
 		const lastNameMatch = LAST_NAME_REGEX.exec(display)
 		const lastName = lastNameMatch && lastNameMatch[1] ? lastNameMatch[1] : ''
-		const filename = `@${display}.md`
+		const atPrefix = this.settings.requireAtPrefix ? '@' : ''
+		const filename = `${atPrefix}${display}.md`
+		const displayName = this.settings.requireAtPrefix ? `@${display}` : display
 
 		// Determine target folder and file path based on folder mode
 		let targetFolder = normalizeFolder(this.settings.peopleFolder)
 		let filePath = targetFolder + filename
 
 		if (this.settings.folderMode === "PER_PERSON") {
-			// Creates: People/@John Doe/@John Doe.md
-			targetFolder = normalizeFolder(this.settings.peopleFolder) + `@${display}/`
+			targetFolder = normalizeFolder(this.settings.peopleFolder) + `${atPrefix}${display}/`
 			filePath = targetFolder + filename
 		} else if (this.settings.folderMode === "PER_LASTNAME") {
-			// Creates: People/Doe/@John Doe.md
 			targetFolder = normalizeFolder(this.settings.peopleFolder) + (lastName ? lastName + '/' : '')
 			filePath = targetFolder + filename
 		}
@@ -136,38 +206,19 @@ module.exports = class AtPeople extends Plugin {
 		// Auto-create folders and files if enabled
 		if (this.settings.autoCreateFiles) {
 			const folderToCreate = targetFolder.replace(/\/$/, '')
-			if (!this.app.vault.getAbstractFileByPath(folderToCreate)) {
-				try {
-					await this.app.vault.createFolder(folderToCreate)
-				} catch (e) {
-					console.warn('Could not create folder', folderToCreate, e)
-				}
-			}
-
-			if (!this.app.vault.getAbstractFileByPath(filePath)) {
-				try {
-					await this.app.vault.create(filePath, '')
-				} catch (e) {
-					console.warn('Could not create file', filePath, e)
-				}
-			}
+			try { await this.app.vault.createFolder(folderToCreate) } catch (e) { /* exists */ }
+			try { await this.app.vault.create(filePath, '') } catch (e) { /* exists */ }
 		}
 
 		// Generate the appropriate link format
 		let link
-		if (this.settings.folderMode === "PER_PERSON" && this.settings.useExplicitLinks) {
-			link = `[[${filePath}|@${display}]]`
-		}
-		else if (this.settings.useExplicitLinks && this.settings.folderMode === "PER_LASTNAME") {
-			link = `[[${filePath}|@${display}]]`
-		}
-		else if (this.settings.useExplicitLinks) {
-			link = `[[${filePath}|@${display}]]`
+		if (this.settings.useExplicitLinks) {
+			link = `[[${filePath}|${displayName}]]`
 		}
 		else {
-			link = `[[@${display}]]`
+			link = `[[${displayName}]]`
 		}
-		
+
 		return link
 	}
 }
@@ -193,8 +244,8 @@ function removeAccents(str) {
  * - Word start match: 800 × length_factor
  * 
  * Length factor: penalizes texts longer than the pattern
- * Formula: (pattern_length / text_length) ^ 1.0
- * This ensures shorter, more precise matches rank higher
+ * Formula: (pattern_length / text_length) ^ 0.5
+ * Square root softens the penalty so backlink boosts have more relative weight
  */
 function fuzzyMatch(pattern, text) {
     pattern = removeAccents(pattern).toLowerCase();
@@ -204,8 +255,8 @@ function fuzzyMatch(pattern, text) {
     // Range: 0.0 to 1.0, where 1.0 is perfect length match
     const getSimilarityFactor = () => {
         const lenRatio = Math.min(pattern.length / text.length, 1.0);
-        // Linear scale for proportional penalty
-        return Math.pow(lenRatio, 1.0);
+        // Square root scale for softer proportional penalty
+        return Math.pow(lenRatio, 0.5);
     };
 
     // Check for substring match (highest priority)
@@ -281,31 +332,36 @@ function fuzzyMatch(pattern, text) {
 }
 
 /**
- * Calculate boost score based on backlink count
- * Uses logarithmic scale to prevent excessive dominance while still rewarding popularity
- * Multiplier of 1000 allows heavily-referenced people to rank higher
- * 
- * Example scores:
- * - 1 backlink: ~173 pts
- * - 10 backlinks: ~600 pts
- * - 50 backlinks: ~985 pts
- * - 100 backlinks: ~1152 pts
- * - 160 backlinks: ~5081 pts (with multiplier 1000)
- * 
+ * Calculate scoring boost from backlinks and recency
+ *
+ * Backlink boost: logarithmic scale × 1000
+ * - 1 backlink: ~693 pts, 10: ~2398, 50: ~3932, 100: ~4615
+ *
+ * Recency boost: exponential decay, max ~200 pts
+ * - Today: ~200, 1 week: ~158, 1 month: ~72, 3 months: ~0
+ * Light tiebreaker — never overrides fuzzy match or backlinks
+ *
  * @param {Object} app - Obsidian app instance
  * @param {string} filepath - Path to the person file
  * @returns {number} Boost score to add to pattern matching score
  */
-function getBacklinkBoost(app, filepath) {
+function getScoringBoost(app, filepath) {
     const file = app.vault.getAbstractFileByPath(filepath);
     if (!file) return 0;
-	let backlinkCount = 0;
-	const backlinks = app.metadataCache.getBacklinksForFile(file);
-        if (backlinks?.data) {
-                backlinkCount = backlinks.data.size;
-		}
-    // High multiplier (1000) so frequently-referenced people can overcome length penalties
-    return backlinkCount > 0 ? Math.log(backlinkCount + 1) * 1000 : 0;
+
+    // Backlink boost: high multiplier so frequently-referenced people overcome length penalties
+    let backlinkBoost = 0;
+    const backlinks = app.metadataCache.getBacklinksForFile(file);
+    if (backlinks?.data) {
+        const count = backlinks.data.size;
+        backlinkBoost = count > 0 ? Math.log(count + 1) * 1000 : 0;
+    }
+
+    // Recency boost: exponential decay based on file modification time
+    const daysAgo = (Date.now() - file.stat.mtime) / 86400000;
+    const recencyBoost = Math.max(0, 200 * Math.exp(-daysAgo / 30));
+
+    return backlinkBoost + recencyBoost;
 }
 
 /**
@@ -313,9 +369,10 @@ function getBacklinkBoost(app, filepath) {
  * Allows converting highlighted text into a person link
  */
 class PersonSuggestModal extends SuggestModal {
-	constructor(app, peopleFileMap, settings, initialQuery, onChoose) {
+	constructor(app, peopleFileMap, aliasMap, settings, initialQuery, onChoose) {
 		super(app)
 		this.peopleFileMap = peopleFileMap
+		this.aliasMap = aliasMap
 		this.settings = settings
 		this.initialQuery = initialQuery
 		this.onChoose = onChoose
@@ -343,37 +400,56 @@ class PersonSuggestModal extends SuggestModal {
 	
 	getSuggestions(query) {
 		if (!query) query = this.initialQuery
-		
-		// Score all existing people
-		let scoredSuggestions = []
+
+		const bestByPerson = {}
+
+		// First pass: cheap fuzzy matching against names
 		for (let key in (this.peopleFileMap || {})) {
 			const score = fuzzyMatch(query, key)
 			if (score > 0) {
-				const backlinkBoost = getBacklinkBoost(this.app, this.peopleFileMap[key])
-				scoredSuggestions.push({
-					score: score + backlinkBoost,
-					type: 'existing',
-					name: key,
-				})
+				bestByPerson[key] = { score, matchedAlias: null }
 			}
 		}
 
-		// Sort by score and limit to top 20
-		scoredSuggestions.sort((a, b) => b.score - a.score)
-		let suggestions = scoredSuggestions.slice(0, 20)
-		
-		// Always include option to create new person
-		suggestions.push({
-			type: 'create',
-			name: query,
-		})
-		
+		// Also match against aliases (still cheap — just fuzzyMatch)
+		if (this.settings.useAliases) {
+			for (let alias in (this.aliasMap || {})) {
+				const canonicalName = this.aliasMap[alias]
+				if (!(this.peopleFileMap || {})[canonicalName]) continue
+				const score = fuzzyMatch(query, alias)
+				if (score > 0 && (!bestByPerson[canonicalName] || score > bestByPerson[canonicalName].score)) {
+					bestByPerson[canonicalName] = { score, matchedAlias: alias }
+				}
+			}
+		}
+
+		// Sort by fuzzy score, take top N for expensive boost calculation
+		let fuzzyResults = Object.entries(bestByPerson).map(([name, data]) => ({ name, ...data }))
+		fuzzyResults.sort((a, b) => b.score - a.score)
+		const topCandidates = fuzzyResults.slice(0, BOOST_CUTOFF)
+
+		// Second pass: add scoring boost (backlinks + recency) only for top candidates
+		for (const candidate of topCandidates) {
+			candidate.score += getScoringBoost(this.app, this.peopleFileMap[candidate.name])
+		}
+
+		// Re-sort with boost and take final 20
+		topCandidates.sort((a, b) => b.score - a.score)
+		let suggestions = topCandidates.slice(0, 20).map(s => ({
+			type: 'existing',
+			name: s.name,
+			matchedAlias: s.matchedAlias,
+		}))
+
+		suggestions.push({ type: 'create', name: query })
 		return suggestions
 	}
-	
+
 	renderSuggestion(suggestion, el) {
 		if (suggestion.type === 'create') {
 			el.createEl('div', { text: 'New person: ' + suggestion.name })
+		} else if (suggestion.matchedAlias) {
+			el.createEl('div', { text: suggestion.name + ' (via ' + suggestion.matchedAlias + ')' })
 		} else {
 			el.createEl('div', { text: suggestion.name })
 		}
@@ -389,9 +465,11 @@ class PersonSuggestModal extends SuggestModal {
  * Triggers when user types '@' followed by text
  */
 class AtPeopleSuggestor extends EditorSuggest {
-	constructor(app, settings) {
+	constructor(app, plugin) {
 		super(app)
-		this.settings = settings
+		this.plugin = plugin
+		this.settings = plugin.settings
+		this.dismissedTrigger = null
 
 		// Register Tab key to select the currently highlighted suggestion
 		this.scope.register([], "Tab", (evt) => {
@@ -403,13 +481,26 @@ class AtPeopleSuggestor extends EditorSuggest {
 			}
 			return true // Allow default Tab if no suggestions are shown
 		})
+
 	}
-	
-	folderModePerPerson = () => this.settings.folderMode === "PER_PERSON"
-	folderModePerLastname = () => this.settings.folderMode === "PER_LASTNAME"
-	
-	updatePeopleMap(peopleFileMap) {
+
+	// Override close to track dismissed '@' position.
+	// When the popup closes without a selection (e.g. Escape or click outside),
+	// record the trigger position so onTrigger can suppress re-activation.
+	close() {
+		if (this.context && !this._selectionMade) {
+			this.dismissedTrigger = {
+				line: this.context.start.line,
+				ch: this.context.start.ch,
+			}
+		}
+		this._selectionMade = false
+		super.close()
+	}
+
+	updatePeopleMap(peopleFileMap, aliasMap) {
 		this.peopleFileMap = peopleFileMap
+		this.aliasMap = aliasMap
 	}
 	
 	/**
@@ -426,117 +517,98 @@ class AtPeopleSuggestor extends EditorSuggest {
 			&& !query.includes(']]')
 			&& (atIndex === 0 || charsLeftOfCursor[atIndex - 1] === ' ')
 		) {
+			// Skip if this '@' was dismissed with Escape
+			if (
+				this.dismissedTrigger
+				&& this.dismissedTrigger.line === cursor.line
+				&& this.dismissedTrigger.ch === atIndex
+			) {
+				return null
+			}
+			// New '@' detected, clear dismissed state
+			this.dismissedTrigger = null
+
 			return {
 				start: { line: cursor.line, ch: atIndex },
 				end: { line: cursor.line, ch: cursor.ch },
 				query,
 			}
 		}
-		
+
+		// Clear dismissed state when cursor moves to a different line
+		if (this.dismissedTrigger && this.dismissedTrigger.line !== cursor.line) {
+			this.dismissedTrigger = null
+		}
+
 		return null
 	}
 	
 	/**
 	 * Get suggestions based on the current query
-	 * Combines pattern matching score with backlink boost
-	 * Returns top 20 results plus option to create new person
+	 * Two-pass approach: cheap fuzzy matching first, then expensive scoring boost
+	 * only for top candidates. This avoids calling getBacklinksForFile on every
+	 * person file on every keystroke.
 	 */
 	getSuggestions(context) {
-		let scoredSuggestions = []
+		const bestByPerson = {}
+
+		// First pass: cheap fuzzy matching against names
 		for (let key in (this.peopleFileMap || {})) {
 			const score = fuzzyMatch(context.query, key)
 			if (score > 0) {
-				const backlinkBoost = getBacklinkBoost(this.app, this.peopleFileMap[key])
-				scoredSuggestions.push({
-					score: score + backlinkBoost,
-					suggestionType: 'set',
-					displayText: key,
-					context,
-				})
+				bestByPerson[key] = { score, matchedAlias: null }
 			}
 		}
 
-		scoredSuggestions.sort((a, b) => b.score - a.score)
-		let suggestions = scoredSuggestions.slice(0, 20).map(s => ({
-			suggestionType: s.suggestionType,
-			displayText: s.displayText,
-			context: s.context,
+		// Also match against aliases (still cheap — just fuzzyMatch)
+		if (this.plugin.settings.useAliases) {
+			for (let alias in (this.aliasMap || {})) {
+				const canonicalName = this.aliasMap[alias]
+				if (!(this.peopleFileMap || {})[canonicalName]) continue
+				const score = fuzzyMatch(context.query, alias)
+				if (score > 0 && (!bestByPerson[canonicalName] || score > bestByPerson[canonicalName].score)) {
+					bestByPerson[canonicalName] = { score, matchedAlias: alias }
+				}
+			}
+		}
+
+		// Sort by fuzzy score, take top N for expensive boost calculation
+		let fuzzyResults = Object.entries(bestByPerson).map(([name, data]) => ({ name, ...data }))
+		fuzzyResults.sort((a, b) => b.score - a.score)
+		const topCandidates = fuzzyResults.slice(0, BOOST_CUTOFF)
+
+		// Second pass: add scoring boost (backlinks + recency) only for top candidates
+		for (const candidate of topCandidates) {
+			candidate.score += getScoringBoost(this.app, this.peopleFileMap[candidate.name])
+		}
+
+		// Re-sort with boost and take final 20
+		topCandidates.sort((a, b) => b.score - a.score)
+		let suggestions = topCandidates.slice(0, 20).map(s => ({
+			suggestionType: 'set',
+			displayText: s.name,
+			matchedAlias: s.matchedAlias,
+			context,
 		}))
 
-		suggestions.push({
-			suggestionType: 'create',
-			displayText: context.query,
-			context,
-		})
-		
+		suggestions.push({ suggestionType: 'create', displayText: context.query, context })
 		return suggestions
 	}
-	
+
 	renderSuggestion(value, elem) {
 		if (value.suggestionType === 'create') elem.setText('New person: ' + value.displayText)
+		else if (value.matchedAlias) elem.setText(value.displayText + ' (via ' + value.matchedAlias + ')')
 		else elem.setText(value.displayText)
 	}
 	
 	/**
 	 * Handle selection of a suggestion
-	 * Creates the appropriate link format based on settings
-	 * Auto-creates files and folders if enabled
+	 * Delegates link creation to the plugin's shared createPersonLink method
 	 */
 	async selectSuggestion(value) {
-		const display = value.displayText
-		const normalizeFolder = (p) => p.endsWith('/') ? p : p + '/'
-		const lastNameMatch = LAST_NAME_REGEX.exec(display)
-		const lastName = lastNameMatch && lastNameMatch[1] ? lastNameMatch[1] : ''
-		const filename = `@${display}.md`
-
-		// Determine target folder and file path based on folder mode
-		let targetFolder = normalizeFolder(this.settings.peopleFolder)
-		let filePath = targetFolder + filename
-
-		if (this.folderModePerPerson()) {
-			// Creates: People/@John Doe/@John Doe.md
-			targetFolder = normalizeFolder(this.settings.peopleFolder) + `@${display}/`
-			filePath = targetFolder + filename
-		} else if (this.folderModePerLastname()) {
-			// Creates: People/Doe/@John Doe.md
-			targetFolder = normalizeFolder(this.settings.peopleFolder) + (lastName ? lastName + '/' : '')
-			filePath = targetFolder + filename
-		}
-
-		// Auto-create folders and files if enabled
-		if (this.settings.autoCreateFiles) {
-			const folderToCreate = targetFolder.replace(/\/$/, '')
-			if (!this.app.vault.getAbstractFileByPath(folderToCreate)) {
-				try {
-					await this.app.vault.createFolder(folderToCreate)
-				} catch (e) {
-					console.warn('Could not create folder', folderToCreate, e)
-				}
-			}
-
-			if (!this.app.vault.getAbstractFileByPath(filePath)) {
-				try {
-					await this.app.vault.create(filePath, '')
-				} catch (e) {
-					console.warn('Could not create file', filePath, e)
-				}
-			}
-		}
-
-		// Generate the appropriate link format
-		let link
-		if (this.folderModePerPerson() && this.settings.useExplicitLinks) {
-			link = `[[${filePath}|@${display}]]`
-		}
-		else if (this.settings.useExplicitLinks && this.folderModePerLastname()) {
-			link = `[[${filePath}|@${display}]]`
-		}
-		else if (this.settings.useExplicitLinks && !this.folderModePerLastname()) {
-			link = `[[${filePath}|@${display}]]`
-		}
-		else {
-			link = `[[@${display}]]`
-		}
+		this._selectionMade = true
+		this.dismissedTrigger = null
+		const link = await this.plugin.createPersonLink(value.displayText)
 
 		// Replace the '@query' text with the generated link
 		value.context.editor.replaceRange(
@@ -544,6 +616,34 @@ class AtPeopleSuggestor extends EditorSuggest {
 			value.context.start,
 			value.context.end,
 		)
+	}
+}
+
+/**
+ * Folder autocomplete for settings input
+ * Shows existing vault folders as suggestions while typing
+ */
+class FolderSuggest extends AbstractInputSuggest {
+	constructor(app, inputEl, onChangeCb) {
+		super(app, inputEl)
+		this.textInputEl = inputEl
+		this.onChangeCb = onChangeCb
+	}
+
+	getSuggestions(inputStr) {
+		const inputLower = inputStr.toLowerCase()
+		const folders = this.app.vault.getAllFolders().map(f => f.path + '/')
+		return folders.filter(folder => folder.toLowerCase().includes(inputLower))
+	}
+
+	renderSuggestion(folder, el) {
+		el.createEl('div', { text: folder })
+	}
+
+	selectSuggestion(folder, evt) {
+		this.textInputEl.value = folder
+		this.close()
+		this.onChangeCb(folder)
 	}
 }
 
@@ -559,22 +659,26 @@ class AtPeopleSettingTab extends PluginSettingTab {
 	display() {
 		const { containerEl } = this
 		containerEl.empty()
+		containerEl.createEl('h2', { text: 'At People Settings' })
 		new Setting(containerEl)
 			.setName('People folder')
-			.setDesc('The folder where people files live, e.g. "People/". (With trailing slash.)')
-			.addText(
-				text => text
+			.setDesc('The folder where people files live.')
+			.addSearch(search => {
+				const handleChange = async (value) => {
+					this.plugin.settings.peopleFolder = value
+					await this.plugin.saveSettings()
+					this.plugin.initialize()
+				}
+				search
 					.setPlaceholder(DEFAULT_SETTINGS.peopleFolder)
 					.setValue(this.plugin.settings.peopleFolder)
-					.onChange(async (value) => {
-						this.plugin.settings.peopleFolder = value
-						await this.plugin.saveSettings()
-						this.plugin.initialize()
-					})
-			)
+					.onChange(handleChange)
+				new FolderSuggest(this.app, search.inputEl, handleChange)
+				search.inputEl.blur()
+			})
 		new Setting(containerEl)
 			.setName('Explicit links')
-			.setDesc('When inserting links include the full path, e.g. [[People/@Bob Dole.md|@Bob Dole]]')
+			.setDesc('When inserting links include the full path, e.g. [[People/@John Doe.md|@John Doe]]')
 			.addToggle(
 				toggle => toggle
 				.setValue(this.plugin.settings.useExplicitLinks)
@@ -585,13 +689,25 @@ class AtPeopleSettingTab extends PluginSettingTab {
 				})
 			)
 		new Setting(containerEl)
+			.setName('Auto-create files')
+			.setDesc('Automatically create person files and folders when selecting a person suggestion')
+			.addToggle(
+				toggle => toggle
+				.setValue(this.plugin.settings.autoCreateFiles)
+				.onChange(async (value) => {
+					this.plugin.settings.autoCreateFiles = value
+					await this.plugin.saveSettings()
+				})
+			)
+		new Setting(containerEl)
 			.setName('Folder mode')
 			.setDesc(multiLineDesc([
-			"Default - Creates a file for every person in the path defined in \"People folder\" e.g. [[People/@Bob Dole|@Bob Dole]]",
+			"Default: People/@John Doe.md",
+			"Per Person: People/@John Doe/@John Doe.md",
+			"Per Lastname: People/Doe/@John Doe.md",
+			"Paths reflect the \"Require @ prefix\" setting.",
 			"",
-			"Everything non-default requires \"Explicit links\" to be enabled!",
-			"Per Person - Creates a folder (and a note with the same name) for every person in the path defined in \"People folder\" e.g. [[People/@Bob Dole/@Bob Dole|@Bob Dole]]",
-			"Per Lastname - Creates a folder with the Lastname of the person in the path defined in \"People folder\" e.g. [[People/Dole/@Bob Dole|@Bob Dole]]"
+			"Non-default modes require \"Explicit links\"."
 			]))
 			.addDropdown(
 				dropdown => {
@@ -607,14 +723,32 @@ class AtPeopleSettingTab extends PluginSettingTab {
 				}
 			)
 		new Setting(containerEl)
-			.setName('Auto-create files')
-			.setDesc('Automatically create person files and folders when selecting a person suggestion')
+			.setName('Include aliases')
+			.setDesc('Match people by their frontmatter aliases (e.g. nicknames). Aliases must be defined in the YAML frontmatter of each person file.')
 			.addToggle(
 				toggle => toggle
-				.setValue(this.plugin.settings.autoCreateFiles)
+				.setValue(this.plugin.settings.useAliases)
 				.onChange(async (value) => {
-					this.plugin.settings.autoCreateFiles = value
+					this.plugin.settings.useAliases = value
 					await this.plugin.saveSettings()
+					this.plugin.initialize()
+				})
+			)
+		new Setting(containerEl)
+			.setName('Require @ prefix (default: enabled)')
+			.setDesc(multiLineDesc([
+			"When enabled, only files starting with @ are recognized as people (e.g. @John Doe.md).",
+			"When disabled, all .md files in the people folder are treated as people.",
+			"",
+			"Warning: if disabled, make sure your people folder only contains person files."
+			]))
+			.addToggle(
+				toggle => toggle
+				.setValue(this.plugin.settings.requireAtPrefix)
+				.onChange(async (value) => {
+					this.plugin.settings.requireAtPrefix = value
+					await this.plugin.saveSettings()
+					this.plugin.initialize()
 				})
 			)
 	}

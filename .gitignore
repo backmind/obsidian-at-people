@@ -4,3 +4,6 @@ node_modules/.package-lock.json
 node_modules/.yarn-integrity
 package-lock.json
 yarn.lock
+
+# Claude Code
+.claude/

@@ -193,8 +193,8 @@ function removeAccents(str) {
  * - Word start match: 800 × length_factor
  * 
  * Length factor: penalizes texts longer than the pattern
- * Formula: (pattern_length / text_length) ^ 1.0
- * This ensures shorter, more precise matches rank higher
+ * Formula: (pattern_length / text_length) ^ 0.5
+ * Square root softens the penalty so backlink boosts have more relative weight
  */
 function fuzzyMatch(pattern, text) {
     pattern = removeAccents(pattern).toLowerCase();
@@ -204,8 +204,8 @@ function fuzzyMatch(pattern, text) {
     // Range: 0.0 to 1.0, where 1.0 is perfect length match
     const getSimilarityFactor = () => {
         const lenRatio = Math.min(pattern.length / text.length, 1.0);
-        // Linear scale for proportional penalty
-        return Math.pow(lenRatio, 1.0);
+        // Square root scale for softer proportional penalty
+        return Math.pow(lenRatio, 0.5);
     };
 
     // Check for substring match (highest priority)
@@ -392,6 +392,7 @@ class AtPeopleSuggestor extends EditorSuggest {
 	constructor(app, settings) {
 		super(app)
 		this.settings = settings
+		this.dismissedTrigger = null
 
 		// Register Tab key to select the currently highlighted suggestion
 		this.scope.register([], "Tab", (evt) => {
@@ -403,8 +404,23 @@ class AtPeopleSuggestor extends EditorSuggest {
 			}
 			return true // Allow default Tab if no suggestions are shown
 		})
+
 	}
-	
+
+	// Override close to track dismissed '@' position.
+	// When the popup closes without a selection (e.g. Escape or click outside),
+	// record the trigger position so onTrigger can suppress re-activation.
+	close() {
+		if (this.context && !this._selectionMade) {
+			this.dismissedTrigger = {
+				line: this.context.start.line,
+				ch: this.context.start.ch,
+			}
+		}
+		this._selectionMade = false
+		super.close()
+	}
+
 	folderModePerPerson = () => this.settings.folderMode === "PER_PERSON"
 	folderModePerLastname = () => this.settings.folderMode === "PER_LASTNAME"
 	
@@ -426,13 +442,29 @@ class AtPeopleSuggestor extends EditorSuggest {
 			&& !query.includes(']]')
 			&& (atIndex === 0 || charsLeftOfCursor[atIndex - 1] === ' ')
 		) {
+			// Skip if this '@' was dismissed with Escape
+			if (
+				this.dismissedTrigger
+				&& this.dismissedTrigger.line === cursor.line
+				&& this.dismissedTrigger.ch === atIndex
+			) {
+				return null
+			}
+			// New '@' detected, clear dismissed state
+			this.dismissedTrigger = null
+
 			return {
 				start: { line: cursor.line, ch: atIndex },
 				end: { line: cursor.line, ch: cursor.ch },
 				query,
 			}
 		}
-		
+
+		// Clear dismissed state when cursor moves to a different line
+		if (this.dismissedTrigger && this.dismissedTrigger.line !== cursor.line) {
+			this.dismissedTrigger = null
+		}
+
 		return null
 	}
 	
@@ -483,6 +515,8 @@ class AtPeopleSuggestor extends EditorSuggest {
 	 * Auto-creates files and folders if enabled
 	 */
 	async selectSuggestion(value) {
+		this._selectionMade = true
+		this.dismissedTrigger = null
 		const display = value.displayText
 		const normalizeFolder = (p) => p.endsWith('/') ? p : p + '/'
 		const lastNameMatch = LAST_NAME_REGEX.exec(display)

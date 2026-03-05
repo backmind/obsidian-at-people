@@ -2,7 +2,7 @@
 
 [![Downloads](https://img.shields.io/badge/dynamic/json?logo=obsidian&color=%23483699&label=downloads&query=%24%5B%22at-people%22%5D.downloads&url=https%3A%2F%2Fraw.githubusercontent.com%2Fobsidianmd%2Fobsidian-releases%2Fmaster%2Fcommunity-plugin-stats.json)](https://obsidian.md/plugins?id=at-people)
 [![Version](https://img.shields.io/github/manifest-json/v/backmind/obsidian-at-people?color=%23483699&logo=obsidian)](https://github.com/backmind/obsidian-at-people/releases)
-[![License](https://img.shields.io/github/license/backmind/obsidian-at-people)](./LICENSE.md)
+[![License](https://img.shields.io/github/license/backmind/obsidian-at-people)](./LICENSE)
 [![Install in Obsidian](https://img.shields.io/badge/Install%20in%20Obsidian-%23483699?logo=obsidian)](https://obsidian.md/plugins?id=at-people)
 
 A lightweight Obsidian plugin that lets you mention people with `@`, just like you would in a chat or social media. Type `@` followed by a name, pick from the suggestions, and a wiki-link is inserted automatically.
@@ -147,4 +147,4 @@ Originally created by **[saibotsivad](https://github.com/saibotsivad/obsidian-at
 
 ## License
 
-Published under the [MIT License](./LICENSE.md).
+Published under the [MIT License](./LICENSE).

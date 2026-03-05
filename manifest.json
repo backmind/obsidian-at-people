@@ -1,7 +1,7 @@
 {
   "id": "at-people",
   "name": "At People",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Use the @ to create links to people files with smart fuzzy search, accent-insensitive matching, and backlink-based ranking.",
   "author": "Yass Fuentes",
   "authorUrl": "https://github.com/backmind/",

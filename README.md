@@ -22,6 +22,7 @@ A lightweight Obsidian plugin that lets you mention people with `@`, just like y
 - **Dismiss with Escape** — press `Esc` to dismiss suggestions; they won't reappear until you type a new `@`
 - **Auto-create files** — optionally create person files and folders on the fly when selecting a suggestion
 - **Flexible folder modes** — store people as flat files, per-person folders, or grouped by last name
+- **Styleable links**: person links get the `at-person` CSS class and a `data-at-person` attribute in Reading view, so you can format them with your own CSS (e.g. as `@`-pills); an optional built-in pill style is included
 
 ## Installation
 
@@ -109,6 +110,42 @@ Typing `@Mary` or `@mamá` will suggest **María García**. The suggestion shows
 ### Require @ prefix
 
 Enabled by default. When enabled, only files starting with `@` are recognized as people. When disabled, all `.md` files in the people folder are treated as people. See [file naming](#important-file-naming) for details.
+
+### Style person links as pills
+
+Disabled by default. When enabled, person links are shown as tag-style pills in Reading view, reusing your theme's tag colors (a pill with `@` instead of `#`). Prefer your own look? See [Styling person links](#styling-person-links) below.
+
+## Styling person links
+
+In Reading (Preview) view, every person link receives:
+
+- the CSS class `at-person`
+- a `data-at-person="<name>"` attribute holding the person's name (without the `@` prefix)
+
+This lets you target person links from your own CSS snippet or theme. For example, to render them as pills with `@` instead of `#`:
+
+```css
+.at-person {
+	background-color: var(--tag-background);
+	color: var(--tag-color);
+	font-size: var(--tag-size);
+	padding: var(--tag-padding-y) var(--tag-padding-x);
+	border-radius: var(--tag-radius);
+	text-decoration: none;
+}
+```
+
+To style a specific person, use the data attribute:
+
+```css
+.at-person[data-at-person="Jane Doe"] {
+	color: var(--color-red);
+}
+```
+
+Don't want to write CSS? Enable **Style person links as pills** in settings for a built-in version of the look above.
+
+> **Note:** styling applies in Reading (Preview) view. Live Preview (edit mode) is not styled yet.
 
 ## How ranking works
 

@@ -6,6 +6,7 @@ const DEFAULT_SETTINGS = {
 	autoCreateFiles: false,
 	requireAtPrefix: true,
 	useAliases: false,
+	enablePillStyle: false,
 }
 
 // Regex to extract person name from file path
@@ -51,6 +52,7 @@ const getPersonName = (filename, settings) => {
 module.exports = class AtPeople extends Plugin {
 	async onload() {
 		await this.loadSettings()
+		this.applyPillStyleClass()
 		this.registerEvent(this.app.vault.on('delete', async event => { await this.update(event) }))
 		this.registerEvent(this.app.vault.on('create', async event => { await this.update(event) }))
 		this.registerEvent(this.app.vault.on('rename', async (event, originalFilepath) => { await this.update(event, originalFilepath) }))
@@ -58,6 +60,9 @@ module.exports = class AtPeople extends Plugin {
 		this.addSettingTab(new AtPeopleSettingTab(this.app, this))
 		this.suggestor = new AtPeopleSuggestor(this.app, this)
 		this.registerEditorSuggest(this.suggestor)
+
+		// Tag person links in Reading view so they can be targeted with CSS.
+		this.registerMarkdownPostProcessor((el, ctx) => this.markPersonLinks(el, ctx.sourcePath))
 		
 		// Command to convert selected text into a person link
 		this.addCommand({
@@ -90,6 +95,11 @@ module.exports = class AtPeople extends Plugin {
 		this.app.workspace.onLayoutReady(this.initialize)
 	}
 
+	onunload() {
+		// Remove the body class that gates the optional pill styling.
+		document.body.classList.remove('at-people-styled')
+	}
+
 	async loadSettings() {
 		const storedSettings = await this.loadData()
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, storedSettings)
@@ -97,6 +107,44 @@ module.exports = class AtPeople extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings || DEFAULT_SETTINGS)
+	}
+
+	// Toggle the body class that enables the optional built-in pill styling.
+	applyPillStyleClass = () => {
+		document.body.classList.toggle('at-people-styled', !!this.settings.enablePillStyle)
+	}
+
+	// Reading-view post-processor: add the `at-person` class and a
+	// `data-at-person` attribute to every internal link that points at a
+	// person file, so the links can be targeted from CSS snippets or themes.
+	markPersonLinks = (el, sourcePath) => {
+		for (const a of el.querySelectorAll('a.internal-link')) {
+			const linkpath = a.getAttribute('data-href') || a.getAttribute('href') || ''
+			const name = this.resolvePersonName(linkpath, sourcePath)
+			if (name) {
+				a.classList.add('at-person')
+				a.setAttribute('data-at-person', name)
+			}
+		}
+	}
+
+	// Resolve the person name a link target refers to, or false if it is not a
+	// person. Uses the resolved file when it exists, with a path-based fallback
+	// so links to not-yet-created person files are still tagged.
+	resolvePersonName = (linkpath, sourcePath) => {
+		if (!linkpath) return false
+		const dest = this.app.metadataCache.getFirstLinkpathDest(linkpath, sourcePath || '')
+		if (dest) return getPersonName(dest.path, this.settings)
+		// Unresolved link (the person file may not exist yet).
+		// Explicit links carry a full path we can match directly.
+		const direct = getPersonName(linkpath, this.settings)
+		if (direct) return direct
+		// Bare links carry only a name; only guess the people-folder path when
+		// the '@' prefix is required, otherwise the guess risks false positives.
+		if (this.settings.requireAtPrefix) {
+			return getPersonName(normalizeFolder(this.settings.peopleFolder) + linkpath + '.md', this.settings)
+		}
+		return false
 	}
 
 	updatePeopleMap = () => {
@@ -749,6 +797,22 @@ class AtPeopleSettingTab extends PluginSettingTab {
 					this.plugin.settings.requireAtPrefix = value
 					await this.plugin.saveSettings()
 					this.plugin.initialize()
+				})
+			)
+		new Setting(containerEl)
+			.setName('Style person links as pills')
+			.setDesc(multiLineDesc([
+			"Show @person links as tag-style pills in Reading view, using your theme's tag colors.",
+			"",
+			"Person links always get the 'at-person' class and a 'data-at-person' attribute, so you can write your own CSS even with this off."
+			]))
+			.addToggle(
+				toggle => toggle
+				.setValue(this.plugin.settings.enablePillStyle)
+				.onChange(async (value) => {
+					this.plugin.settings.enablePillStyle = value
+					await this.plugin.saveSettings()
+					this.plugin.applyPillStyleClass()
 				})
 			)
 	}

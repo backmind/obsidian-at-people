@@ -1,0 +1,31 @@
+/*
+ * At People - styling for @person links.
+ *
+ * Person links in Reading (Preview) view always receive the `at-person`
+ * class and a `data-at-person="<name>"` attribute, so you can target them
+ * from your own CSS snippets or theme regardless of the setting below.
+ *
+ * The pill look here is opt-in: it only applies when "Style person links
+ * as pills" is enabled in the plugin settings, which adds the
+ * `at-people-styled` class to the document body. It reuses Obsidian's tag
+ * variables, so person links look like native tag pills but with @.
+ */
+
+body.at-people-styled .at-person {
+	background-color: var(--tag-background);
+	border: var(--tag-border-width) solid var(--tag-border-color);
+	border-radius: var(--tag-radius);
+	color: var(--tag-color);
+	font-size: var(--tag-size);
+	font-weight: var(--tag-weight);
+	padding: var(--tag-padding-y) var(--tag-padding-x);
+	text-decoration: var(--tag-decoration);
+	line-height: 1;
+}
+
+body.at-people-styled .at-person:hover {
+	background-color: var(--tag-background-hover);
+	border-color: var(--tag-border-color-hover);
+	color: var(--tag-color-hover);
+	text-decoration: var(--tag-decoration-hover);
+}

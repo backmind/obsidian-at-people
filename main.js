@@ -868,7 +868,7 @@ class AtPeopleSettingTab extends PluginSettingTab {
 	display() {
 		const { containerEl } = this
 		containerEl.empty()
-		containerEl.createEl('h2', { text: 'At People Settings' })
+		new Setting(containerEl).setName('Files & folders').setHeading()
 		new Setting(containerEl)
 			.setName('People folder')
 			.setDesc('The folder where people files live.')
@@ -885,29 +885,6 @@ class AtPeopleSettingTab extends PluginSettingTab {
 				new FolderSuggest(this.app, search.inputEl, handleChange)
 				search.inputEl.blur()
 			})
-		new Setting(containerEl)
-			.setName('Explicit links')
-			.setDesc('When inserting links include the full path, e.g. [[People/@John Doe.md|@John Doe]]')
-			.addToggle(
-				toggle => toggle
-				.setValue(this.plugin.settings.useExplicitLinks)
-				.onChange(async (value) => {
-					this.plugin.settings.useExplicitLinks = value
-					await this.plugin.saveSettings()
-					this.plugin.initialize()
-				})
-			)
-		new Setting(containerEl)
-			.setName('Auto-create files')
-			.setDesc('Automatically create person files and folders when selecting a person suggestion')
-			.addToggle(
-				toggle => toggle
-				.setValue(this.plugin.settings.autoCreateFiles)
-				.onChange(async (value) => {
-					this.plugin.settings.autoCreateFiles = value
-					await this.plugin.saveSettings()
-				})
-			)
 		new Setting(containerEl)
 			.setName('Folder mode')
 			.setDesc(multiLineDesc([
@@ -932,40 +909,15 @@ class AtPeopleSettingTab extends PluginSettingTab {
 				}
 			)
 		new Setting(containerEl)
-			.setName('Include aliases')
-			.setDesc('Match people by their frontmatter aliases (e.g. nicknames). Aliases must be defined in the YAML frontmatter of each person file.')
+			.setName('Auto-create files')
+			.setDesc('Automatically create person files and folders when selecting a person suggestion')
 			.addToggle(
 				toggle => toggle
-				.setValue(this.plugin.settings.useAliases)
+				.setValue(this.plugin.settings.autoCreateFiles)
 				.onChange(async (value) => {
-					this.plugin.settings.useAliases = value
+					this.plugin.settings.autoCreateFiles = value
 					await this.plugin.saveSettings()
-					this.plugin.initialize()
 				})
-			)
-		new Setting(containerEl)
-			.setName('Use alias as display text')
-			.setDesc(multiLineDesc([
-			"Show a person's frontmatter alias as the visible link text, e.g. [[@john-doe|John Doe]]. The link still points at the real file; only the displayed text changes.",
-			"",
-			"Off: always use the file name.",
-			"Always prefer alias: use an alias whenever the person has one (the matched alias, otherwise the first alias).",
-			"Only when matched by alias: use the alias only if you searched by that alias; if you matched by name, keep the name.",
-			"",
-			"Requires aliases in frontmatter; works best with \"Include aliases\" enabled. If a person has no alias, links are created as before."
-			]))
-			.addDropdown(
-				dropdown => {
-					dropdown.addOption('off', 'Off')
-					dropdown.addOption('always', 'Always prefer alias')
-					dropdown.addOption('matched', 'Only when matched by alias')
-					dropdown.setValue(this.plugin.settings.aliasDisplayMode)
-					dropdown.onChange(async (value) => {
-						this.plugin.settings.aliasDisplayMode = value
-						await this.plugin.saveSettings()
-						this.plugin.initialize()
-					})
-				}
 			)
 		new Setting(containerEl)
 			.setName('Require @ prefix (default: enabled)')
@@ -984,10 +936,77 @@ class AtPeopleSettingTab extends PluginSettingTab {
 					this.plugin.initialize()
 				})
 			)
+
+		new Setting(containerEl).setName('Links').setHeading()
+		new Setting(containerEl)
+			.setName('Explicit links')
+			.setDesc('When inserting links include the full path, e.g. [[People/@John Doe.md|@John Doe]]')
+			.addToggle(
+				toggle => toggle
+				.setValue(this.plugin.settings.useExplicitLinks)
+				.onChange(async (value) => {
+					this.plugin.settings.useExplicitLinks = value
+					await this.plugin.saveSettings()
+					this.plugin.initialize()
+				})
+			)
+		// Build a richer description: a short intro, then one bold-labelled line
+		// per option, so the choices stand out instead of reading as prose.
+		const aliasDesc = document.createDocumentFragment()
+		const aliasLine = (...parts) => {
+			if (aliasDesc.childNodes.length) aliasDesc.appendChild(document.createElement('br'))
+			for (const part of parts) {
+				aliasDesc.appendChild(typeof part === 'string' ? document.createTextNode(part) : part)
+			}
+		}
+		const aliasOption = (label) => {
+			const strong = document.createElement('strong')
+			strong.textContent = label
+			return strong
+		}
+		aliasLine("Use a person's alias as the visible link text. A link to @john-doe then shows as John Doe, while still pointing to the file.")
+		aliasLine('')
+		aliasLine(aliasOption('Off'), ': always show the file name.')
+		aliasLine(aliasOption('Always prefer alias'), ': show the alias whenever the person has one.')
+		aliasLine(aliasOption('Only when matched by alias'), ': show the alias only if you searched by it; searching by the file name keeps the file name.')
+		aliasLine('')
+		aliasLine('A person with no alias always shows the file name.')
+		new Setting(containerEl)
+			.setName('Use alias as display text')
+			.setDesc(aliasDesc)
+			.addDropdown(
+				dropdown => {
+					dropdown.addOption('off', 'Off')
+					dropdown.addOption('always', 'Always prefer alias')
+					dropdown.addOption('matched', 'Only when matched by alias')
+					dropdown.setValue(this.plugin.settings.aliasDisplayMode)
+					dropdown.onChange(async (value) => {
+						this.plugin.settings.aliasDisplayMode = value
+						await this.plugin.saveSettings()
+						this.plugin.initialize()
+					})
+				}
+			)
+
+		new Setting(containerEl).setName('Matching').setHeading()
+		new Setting(containerEl)
+			.setName('Include aliases')
+			.setDesc('Match people by their frontmatter aliases (e.g. nicknames). Aliases must be defined in the YAML frontmatter of each person file.')
+			.addToggle(
+				toggle => toggle
+				.setValue(this.plugin.settings.useAliases)
+				.onChange(async (value) => {
+					this.plugin.settings.useAliases = value
+					await this.plugin.saveSettings()
+					this.plugin.initialize()
+				})
+			)
+
+		new Setting(containerEl).setName('Appearance').setHeading()
 		new Setting(containerEl)
 			.setName('Style person links as pills')
 			.setDesc(multiLineDesc([
-			"Show @person links as tag-style pills in Reading view, using your theme's tag colors.",
+			"Show @person links as tag-style pills in Reading view and Live Preview, using your theme's tag colors.",
 			"",
 			"Person links always get the 'at-person' class and a 'data-at-person' attribute, so you can write your own CSS even with this off."
 			]))

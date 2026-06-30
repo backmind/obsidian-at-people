@@ -14,6 +14,7 @@ const DEFAULT_SETTINGS = {
 	autoCreateFiles: false,
 	requireAtPrefix: true,
 	useAliases: false,
+	aliasDisplayMode: 'off', // 'off' | 'always' | 'matched'
 	enablePillStyle: false,
 }
 
@@ -98,8 +99,8 @@ module.exports = class AtPeople extends Plugin {
 					this.aliasMap,
 					this.settings,
 					selection,
-					async (personName) => {
-						const link = await this.createPersonLink(personName)
+					async (personName, matchedAlias) => {
+						const link = await this.createPersonLink(personName, matchedAlias)
 						editor.replaceRange(link, from, to)
 					}
 				).open()
@@ -170,6 +171,14 @@ module.exports = class AtPeople extends Plugin {
 		const file = this.app.vault.getAbstractFileByPath(filepath)
 		const aliases = file && this.app.metadataCache.getFileCache(file)?.frontmatter?.aliases
 		return Array.isArray(aliases) ? aliases.filter(a => typeof a === 'string') : []
+	}
+
+	// Get the first frontmatter alias for a person by canonical name, or null
+	firstAliasForName = (name) => {
+		const path = (this.peopleFileMap || {})[name]
+		if (!path) return null
+		const aliases = this.getAliasesForFile(path)
+		return aliases.length ? aliases[0] : null
 	}
 
 	// Refresh aliases when a file's metadata changes (e.g. frontmatter edited)
@@ -246,12 +255,27 @@ module.exports = class AtPeople extends Plugin {
 	
 	// Shared logic to create links to people
 	// Handles different folder modes (default, per-person, per-lastname)
-	async createPersonLink(display) {
+	async createPersonLink(display, matchedAlias = null) {
 		const lastNameMatch = LAST_NAME_REGEX.exec(display)
 		const lastName = lastNameMatch && lastNameMatch[1] ? lastNameMatch[1] : ''
 		const atPrefix = this.settings.requireAtPrefix ? '@' : ''
 		const filename = `${atPrefix}${display}.md`
 		const displayName = this.settings.requireAtPrefix ? `@${display}` : display
+
+		// Optionally use a frontmatter alias as the visible link text.
+		// The link target always stays the canonical link; only the display changes.
+		//   'always'  - use an alias whenever the person has one (the matched
+		//               alias, otherwise the first frontmatter alias).
+		//   'matched' - use the alias only when the search actually matched one;
+		//               if matched by name, keep the name.
+		//   'off'     - never; always use the file-name-derived display.
+		let aliasText = null
+		const aliasMode = this.settings.aliasDisplayMode
+		if (aliasMode === 'always') {
+			aliasText = matchedAlias || this.firstAliasForName(display) || null
+		} else if (aliasMode === 'matched') {
+			aliasText = matchedAlias || null
+		}
 
 		// Determine target folder and file path based on folder mode
 		let targetFolder = normalizeFolder(this.settings.peopleFolder)
@@ -272,10 +296,15 @@ module.exports = class AtPeople extends Plugin {
 			try { await this.app.vault.create(filePath, '') } catch (e) { /* exists */ }
 		}
 
-		// Generate the appropriate link format
+		// Generate the appropriate link format.
+		// When an alias display text is available, always emit a piped link so the
+		// target is preserved while the visible text becomes the alias.
 		let link
 		if (this.settings.useExplicitLinks) {
-			link = `[[${filePath}|${displayName}]]`
+			link = aliasText ? `[[${filePath}|${aliasText}]]` : `[[${filePath}|${displayName}]]`
+		}
+		else if (aliasText) {
+			link = `[[${displayName}|${aliasText}]]`
 		}
 		else {
 			link = `[[${displayName}]]`
@@ -636,7 +665,7 @@ class PersonSuggestModal extends SuggestModal {
 	}
 	
 	onChooseSuggestion(suggestion) {
-		this.onChoose(suggestion.name)
+		this.onChoose(suggestion.name, suggestion.matchedAlias)
 	}
 }
 
@@ -788,7 +817,7 @@ class AtPeopleSuggestor extends EditorSuggest {
 	async selectSuggestion(value) {
 		this._selectionMade = true
 		this.dismissedTrigger = null
-		const link = await this.plugin.createPersonLink(value.displayText)
+		const link = await this.plugin.createPersonLink(value.displayText, value.matchedAlias)
 
 		// Replace the '@query' text with the generated link
 		value.context.editor.replaceRange(
@@ -913,6 +942,30 @@ class AtPeopleSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings()
 					this.plugin.initialize()
 				})
+			)
+		new Setting(containerEl)
+			.setName('Use alias as display text')
+			.setDesc(multiLineDesc([
+			"Show a person's frontmatter alias as the visible link text, e.g. [[@john-doe|John Doe]]. The link still points at the real file; only the displayed text changes.",
+			"",
+			"Off: always use the file name.",
+			"Always prefer alias: use an alias whenever the person has one (the matched alias, otherwise the first alias).",
+			"Only when matched by alias: use the alias only if you searched by that alias; if you matched by name, keep the name.",
+			"",
+			"Requires aliases in frontmatter; works best with \"Include aliases\" enabled. If a person has no alias, links are created as before."
+			]))
+			.addDropdown(
+				dropdown => {
+					dropdown.addOption('off', 'Off')
+					dropdown.addOption('always', 'Always prefer alias')
+					dropdown.addOption('matched', 'Only when matched by alias')
+					dropdown.setValue(this.plugin.settings.aliasDisplayMode)
+					dropdown.onChange(async (value) => {
+						this.plugin.settings.aliasDisplayMode = value
+						await this.plugin.saveSettings()
+						this.plugin.initialize()
+					})
+				}
 			)
 		new Setting(containerEl)
 			.setName('Require @ prefix (default: enabled)')

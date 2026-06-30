@@ -272,7 +272,9 @@ module.exports = class AtPeople extends Plugin {
 		//               if matched by name, keep the name.
 		//   'off'     - never; always use the file-name-derived display.
 		let aliasText = null
-		const aliasMode = this.settings.aliasDisplayMode
+		// Alias display is a sub-feature of "Include aliases": it only applies
+		// when alias matching is enabled.
+		const aliasMode = this.settings.useAliases ? this.settings.aliasDisplayMode : 'off'
 		if (aliasMode === 'always') {
 			aliasText = matchedAlias || this.firstAliasForName(display) || null
 		} else if (aliasMode === 'matched') {
@@ -895,7 +897,7 @@ class AtPeopleSettingTab extends PluginSettingTab {
 				})
 			)
 		new Setting(containerEl)
-			.setName('Require @ prefix (default: enabled)')
+			.setName('Require @ prefix')
 			.setDesc(multiLineDesc([
 			"When enabled, only files starting with @ are recognized as people (e.g. @John Doe.md).",
 			"When disabled, all .md files in the people folder are treated as people.",
@@ -925,6 +927,23 @@ class AtPeopleSettingTab extends PluginSettingTab {
 					this.plugin.initialize()
 				})
 			)
+
+		new Setting(containerEl).setName('Aliases').setHeading()
+		new Setting(containerEl)
+			.setName('Include aliases')
+			.setDesc('Match people by their frontmatter aliases (e.g. nicknames). Aliases must be defined in the YAML frontmatter of each person file.')
+			.addToggle(
+				toggle => toggle
+				.setValue(this.plugin.settings.useAliases)
+				.onChange(async (value) => {
+					this.plugin.settings.useAliases = value
+					await this.plugin.saveSettings()
+					this.plugin.initialize()
+					// Re-render so "Use alias as display text" below reflects its
+					// enabled/disabled state immediately (it depends on this toggle).
+					this.display()
+				})
+			)
 		// Build a richer description: a short intro, then one bold-labelled line
 		// per option, so the choices stand out instead of reading as prose.
 		const aliasDesc = document.createDocumentFragment()
@@ -945,8 +964,8 @@ class AtPeopleSettingTab extends PluginSettingTab {
 		aliasLine(aliasOption('Always prefer alias'), ': show the alias whenever the person has one.')
 		aliasLine(aliasOption('Only when matched by alias'), ': show the alias only if you searched by it; searching by the file name keeps the file name.')
 		aliasLine('')
-		aliasLine('A person with no alias always shows the file name.')
-		new Setting(containerEl)
+		aliasLine('Needs "Include aliases" above. A person with no alias always shows the file name.')
+		const aliasDisplaySetting = new Setting(containerEl)
 			.setName('Use alias as display text')
 			.setDesc(aliasDesc)
 			.addDropdown(
@@ -955,6 +974,7 @@ class AtPeopleSettingTab extends PluginSettingTab {
 					dropdown.addOption('always', 'Always prefer alias')
 					dropdown.addOption('matched', 'Only when matched by alias')
 					dropdown.setValue(this.plugin.settings.aliasDisplayMode)
+					dropdown.setDisabled(!this.plugin.settings.useAliases)
 					dropdown.onChange(async (value) => {
 						this.plugin.settings.aliasDisplayMode = value
 						await this.plugin.saveSettings()
@@ -962,20 +982,9 @@ class AtPeopleSettingTab extends PluginSettingTab {
 					})
 				}
 			)
-
-		new Setting(containerEl).setName('Matching').setHeading()
-		new Setting(containerEl)
-			.setName('Include aliases')
-			.setDesc('Match people by their frontmatter aliases (e.g. nicknames). Aliases must be defined in the YAML frontmatter of each person file.')
-			.addToggle(
-				toggle => toggle
-				.setValue(this.plugin.settings.useAliases)
-				.onChange(async (value) => {
-					this.plugin.settings.useAliases = value
-					await this.plugin.saveSettings()
-					this.plugin.initialize()
-				})
-			)
+		// Grey out the whole row when alias matching is off so the dependency on
+		// "Include aliases" is visible, not just implied.
+		aliasDisplaySetting.setDisabled(!this.plugin.settings.useAliases)
 
 		new Setting(containerEl).setName('Appearance').setHeading()
 		new Setting(containerEl)
@@ -994,5 +1003,30 @@ class AtPeopleSettingTab extends PluginSettingTab {
 					this.plugin.applyPillStyleClass()
 				})
 			)
+
+		new Setting(containerEl)
+			.setName('Reset to defaults')
+			.setDesc('Restore every setting above to its default value.')
+			.addButton(button => {
+				let confirming = false
+				button
+					.setButtonText('Reset to defaults')
+					.onClick(async () => {
+						// Two-click guard: the first click arms the reset, the second
+						// (within a few seconds) performs it, to avoid accidents.
+						if (!confirming) {
+							confirming = true
+							button.setButtonText('Click again to confirm').setWarning()
+							window.setTimeout(() => { if (confirming) this.display() }, 4000)
+							return
+						}
+						this.plugin.settings = Object.assign({}, DEFAULT_SETTINGS)
+						await this.plugin.saveSettings()
+						this.plugin.applyPillStyleClass()
+						this.plugin.initialize()
+						new Notice('At People settings reset to defaults')
+						this.display()
+					})
+			})
 	}
 }

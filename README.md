@@ -110,7 +110,7 @@ Typing `@Mary` or `@mamá` will suggest **María García**. The suggestion shows
 
 ### Use alias as display text
 
-Off by default. Controls whether a generated link uses a person's frontmatter alias as the *visible* text. The link target never changes; only the displayed text does:
+Off by default, and only available when **Include aliases** is enabled. Controls whether a generated link uses a person's frontmatter alias as the *visible* text. The link target never changes; only the displayed text does:
 
 - **Off** — always use the file name.
 - **Always prefer alias** — use an alias whenever the person has one.

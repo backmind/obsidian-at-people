@@ -17,12 +17,13 @@ A lightweight Obsidian plugin that lets you mention people with `@`, just like y
   - `"jd"` matches **John Doe** (initials)
   - `"doe jo"` matches **John Doe** (multi-word)
 - **Frontmatter aliases** — match people by nicknames or alternate names defined in their YAML frontmatter (opt-in)
+- **Alias as display text** — optionally show a person's alias as the visible link text (e.g. a link to `@john-doe` displays as `Uncle John`) while the link still points to the file (opt-in)
 - **Backlink-based ranking** — people you reference often appear higher in suggestions, with a slight recency boost for recently edited notes
-- **Link selected text** — select any text, run the command **"At-People: Link selected text to person"** from the palette, and convert it into a person link instantly. Assign a hotkey (e.g. `Ctrl+Shift+A`) for even faster linking.
+- **Link selected text** — select any text, run the command **"At People: Link selected text to person"** from the palette, and convert it into a person link instantly. Assign a hotkey (e.g. `Ctrl+Shift+A`) for even faster linking.
 - **Dismiss with Escape** — press `Esc` to dismiss suggestions; they won't reappear until you type a new `@`
 - **Auto-create files** — optionally create person files and folders on the fly when selecting a suggestion
 - **Flexible folder modes** — store people as flat files, per-person folders, or grouped by last name
-- **Styleable links**: person links get the `at-person` CSS class and a `data-at-person` attribute in Reading view, so you can format them with your own CSS (e.g. as `@`-pills); an optional built-in pill style is included
+- **Styleable links** — person links get the `at-person` CSS class and a `data-at-person` attribute in both Reading view and Live Preview, so you can format them with your own CSS (e.g. as `@`-pills); an optional built-in pill style is included
 
 ## Installation
 
@@ -107,17 +108,27 @@ aliases:
 
 Typing `@Mary` or `@mamá` will suggest **María García**. The suggestion shows the matched alias so you know why it appeared (e.g. `María García (via Mary)`). The inserted link always points to the canonical person name.
 
+### Use alias as display text
+
+Off by default. Controls whether a generated link uses a person's frontmatter alias as the *visible* text. The link target never changes; only the displayed text does:
+
+- **Off** — always use the file name.
+- **Always prefer alias** — use an alias whenever the person has one.
+- **Only when matched by alias** — use the alias only when you searched by it; searching by the file name keeps the file name.
+
+For example, if `@john-doe.md` has the alias `Uncle John`, the inserted link becomes `[[@john-doe|Uncle John]]`. A person with no alias always uses the file name.
+
 ### Require @ prefix
 
 Enabled by default. When enabled, only files starting with `@` are recognized as people. When disabled, all `.md` files in the people folder are treated as people. See [file naming](#important-file-naming) for details.
 
 ### Style person links as pills
 
-Disabled by default. When enabled, person links are shown as tag-style pills in Reading view, reusing your theme's tag colors (a pill with `@` instead of `#`). Prefer your own look? See [Styling person links](#styling-person-links) below.
+Disabled by default. When enabled, person links are shown as tag-style pills in Reading view and Live Preview, reusing your theme's tag colors (a pill with `@` instead of `#`). Prefer your own look? See [Styling person links](#styling-person-links) below.
 
 ## Styling person links
 
-In Reading (Preview) view, every person link receives:
+In both Reading view and Live Preview, every person link receives:
 
 - the CSS class `at-person`
 - a `data-at-person="<name>"` attribute holding the person's name (without the `@` prefix)
@@ -145,8 +156,6 @@ To style a specific person, use the data attribute:
 
 Don't want to write CSS? Enable **Style person links as pills** in settings for a built-in version of the look above.
 
-> **Note:** styling applies in Reading (Preview) view. Live Preview (edit mode) is not styled yet.
-
 ## How ranking works
 
 Results are ranked by combining three factors: how closely the query matches the name (with a slight preference for shorter, more precise matches), how often the person is referenced across your vault, and a light recency boost for recently edited person notes. Frequently mentioned people naturally rise to the top, while still respecting the relevance of your current query.
@@ -159,7 +168,7 @@ Some plugins conflict with the `@` symbol. Check the [known plugin conflicts](ht
 
 | | **At People** | **[At Symbol Linking](https://github.com/Ebonsignori/obsidian-at-symbol-linking)** |
 |---|---|---|
-| Size | ~25 KB | ~145 KB |
+| Size | ~37 KB | ~145 KB |
 | Focus | People only | Multiple entity types |
 | Multi-symbol support | `@` only | `@`, `$`, etc. mapped to different folders |
 | Alias support | Yes (frontmatter) | Yes |

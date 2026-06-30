@@ -1,4 +1,12 @@
-const { AbstractInputSuggest, EditorSuggest, SuggestModal, Notice, Plugin, PluginSettingTab, Setting } = require('obsidian')
+const { AbstractInputSuggest, EditorSuggest, SuggestModal, Notice, Plugin, PluginSettingTab, Setting, editorLivePreviewField, editorInfoField } = require('obsidian')
+// CodeMirror 6 APIs used to tag person links in Live Preview (the editor view).
+// Obsidian bundles these modules, so they resolve at runtime via require().
+const { ViewPlugin, Decoration } = require('@codemirror/view')
+const { RangeSetBuilder } = require('@codemirror/state')
+// tokenClassNodeProp exposes Obsidian's stream-parser token classes (e.g.
+// "hmd-internal-link", "link-alias"). These are NOT available via
+// node.type.name, so we must read them through this node-type prop.
+const { syntaxTree, tokenClassNodeProp } = require('@codemirror/language')
 
 // Default plugin configuration
 const DEFAULT_SETTINGS = {
@@ -63,7 +71,13 @@ module.exports = class AtPeople extends Plugin {
 
 		// Tag person links in Reading view so they can be targeted with CSS.
 		this.registerMarkdownPostProcessor((el, ctx) => this.markPersonLinks(el, ctx.sourcePath))
-		
+
+		// Tag person links in Live Preview (the CM6 editor view). Internal links
+		// there are rendered by CodeMirror and never pass through the markdown
+		// post-processor above, so without this they would not get the
+		// `at-person` class / `data-at-person` attribute.
+		this.registerEditorExtension([buildPersonLinkExtension(this)])
+
 		// Command to convert selected text into a person link
 		this.addCommand({
 			id: 'link-selection-to-person',
@@ -272,6 +286,121 @@ module.exports = class AtPeople extends Plugin {
 }
 
 /**
+ * Build the CodeMirror 6 editor extension that adds the `at-person` class and a
+ * `data-at-person` attribute to internal links pointing at person files while in
+ * Live Preview. This mirrors the Reading-view post-processor (markPersonLinks) so
+ * both views share the SAME person-detection rules (resolvePersonName).
+ *
+ * The extension is a ViewPlugin that builds mark Decorations over the visible
+ * ranges only (cheap) and rebuilds them on document, viewport, and selection
+ * changes. It closes over the plugin instance so it can reuse resolvePersonName.
+ *
+ * Detection walks the editor syntax tree (not a text regex) and operates on the
+ * `hmd-internal-link` tokens directly. Those tokens cover only the inner link
+ * text, never the `[[`/`]]` brackets (which are separate "formatting-link"
+ * tokens), so the target/alias text is read straight from each token's range.
+ * The pattern follows the Supercharged Links plugin's live-preview decorator.
+ *
+ * Source path is read from `editorInfoField` so bare/relative links resolve the
+ * same way they do in Reading view. Embeds (`![[...]]`) are not special-cased,
+ * so a person embed's inner text is also tagged (Reading view does not tag
+ * embeds); this is a rare, cosmetic-only difference.
+ */
+function buildPersonLinkExtension(plugin) {
+	// Resolve the note that owns this editor so link resolution matches the
+	// Reading-view post-processor (relative/bare links can depend on it).
+	const sourcePathFor = (view) => {
+		try {
+			const info = view.state.field(editorInfoField, false)
+			return (info && info.file && info.file.path) || ''
+		} catch (e) {
+			return ''
+		}
+	}
+
+	return ViewPlugin.fromClass(
+		class {
+			constructor(view) {
+				this.decorations = this.buildDecorations(view)
+			}
+
+			update(update) {
+				// Rebuild on text, viewport, or selection changes (Obsidian swaps a
+				// link between its rendered form and raw source as the cursor moves).
+				if (update.docChanged || update.viewportChanged || update.selectionSet) {
+					this.decorations = this.buildDecorations(update.view)
+				}
+			}
+
+			buildDecorations(view) {
+				const builder = new RangeSetBuilder()
+				// Only decorate in Live Preview, never in plain source mode.
+				if (!view.state.field(editorLivePreviewField, false)) {
+					return builder.finish()
+				}
+				const sourcePath = sourcePathFor(view)
+				const tree = syntaxTree(view.state)
+				// Person name carried from an internal-link target to its alias token.
+				let pendingPerson = null
+
+				for (const { from, to } of view.visibleRanges) {
+					tree.iterate({
+						from,
+						to,
+						enter: (node) => {
+							// Obsidian joins a node's stream-parser token classes with
+							// underscores in the type name, e.g.
+							// "hmd-internal-link_link-alias_strong". Split them back out
+							// to test individual classes. The `[[`/`]]` brackets are
+							// separate "formatting-link" tokens with no
+							// "hmd-internal-link" class, so they are skipped here (this
+							// is why a bracket-based regex over the token range fails —
+							// the token covers only the inner text).
+							const classes = new Set(node.type.name.split('_'))
+							if (!classes.has('hmd-internal-link')) return
+							if (classes.has('link-alias-pipe')) return // the "|" separator
+
+							if (classes.has('link-alias')) {
+								// The visible alias in [[target|Alias]]. Tag it when its
+								// target resolved to a person.
+								if (pendingPerson) {
+									builder.add(node.from, node.to, Decoration.mark({
+										class: 'at-person',
+										attributes: { 'data-at-person': String(pendingPerson) },
+									}))
+								}
+								pendingPerson = null
+								return
+							}
+
+							// Otherwise this token is the link target text. Resolve the
+							// person it points at, sharing the Reading-view rules.
+							let linkText = view.state.doc.sliceString(node.from, node.to)
+							linkText = linkText.split('#')[0].split('^')[0].trim()
+							const personName = plugin.resolvePersonName(linkText, sourcePath)
+							pendingPerson = personName || null
+							// When the link has an alias the target text is hidden and the
+							// alias token (handled above) carries the visible text, so only
+							// tag the target itself when there is no alias.
+							if (personName && !classes.has('link-has-alias')) {
+								builder.add(node.from, node.to, Decoration.mark({
+									class: 'at-person',
+									attributes: { 'data-at-person': String(personName) },
+								}))
+							}
+						},
+					})
+				}
+				return builder.finish()
+			}
+		},
+		{
+			decorations: (instance) => instance.decorations,
+		},
+	)
+}
+
+/**
  * Remove accents/diacritics from a string for accent-insensitive matching
  * Example: "José García" -> "Jose Garcia"
  */
@@ -296,7 +425,10 @@ function removeAccents(str) {
  * Square root softens the penalty so backlink boosts have more relative weight
  */
 function fuzzyMatch(pattern, text) {
-    pattern = removeAccents(pattern).toLowerCase();
+    // Trim surrounding whitespace from the query: a leading/trailing space (e.g.
+    // added by a phone keyboard) is never meaningful and would otherwise break
+    // the substring match. Always-on behavior, not configurable.
+    pattern = removeAccents(pattern).toLowerCase().trim();
     text = removeAccents(text).toLowerCase();
 
     // Similarity factor: penalizes texts longer than the pattern

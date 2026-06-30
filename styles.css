@@ -1,9 +1,13 @@
 /*
  * At People - styling for @person links.
  *
- * Person links in Reading (Preview) view always receive the `at-person`
- * class and a `data-at-person="<name>"` attribute, so you can target them
- * from your own CSS snippets or theme regardless of the setting below.
+ * Person links always receive the `at-person` class and a
+ * `data-at-person="<name>"` attribute, in BOTH Reading (Preview) view and
+ * Live Preview (the editor), so you can target them from your own CSS
+ * snippets or theme regardless of the setting below. In Live Preview the
+ * class is added by a CodeMirror decoration, but it still lands on an element
+ * under `<body>` (inside `.cm-editor`), so the single shared rule below
+ * matches there too without an editor-specific selector.
  *
  * The pill look here is opt-in: it only applies when "Style person links
  * as pills" is enabled in the plugin settings, which adds the

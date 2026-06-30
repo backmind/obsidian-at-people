@@ -11,6 +11,8 @@ const { syntaxTree, tokenClassNodeProp } = require('@codemirror/language')
 // Default plugin configuration
 const DEFAULT_SETTINGS = {
 	peopleFolder: 'People/',
+	useExplicitLinks: false,
+	folderMode: 'DEFAULT', // 'DEFAULT' | 'PER_PERSON' | 'PER_LASTNAME'
 	autoCreateFiles: false,
 	requireAtPrefix: true,
 	useAliases: false,
@@ -574,6 +576,54 @@ function getScoringBoost(app, filepath) {
 }
 
 /**
+ * Rank person candidates for a query and return the best matches.
+ *
+ * Two-pass approach shared by the editor suggester and the command modal so
+ * both rank identically: cheap fuzzy matching over every name (and over aliases
+ * when enabled), then the expensive backlink + recency boost on only the top
+ * BOOST_CUTOFF candidates. Returns at most 20 entries as { name, matchedAlias }.
+ *
+ * @returns {Array<{name: string, matchedAlias: string|null}>}
+ */
+function rankPeople(app, query, peopleFileMap, aliasMap, useAliases) {
+	const bestByPerson = {}
+
+	// First pass: cheap fuzzy matching against names
+	for (let key in (peopleFileMap || {})) {
+		const score = fuzzyMatch(query, key)
+		if (score > 0) {
+			bestByPerson[key] = { score, matchedAlias: null }
+		}
+	}
+
+	// Also match against aliases (still cheap — just fuzzyMatch)
+	if (useAliases) {
+		for (let alias in (aliasMap || {})) {
+			const canonicalName = aliasMap[alias]
+			if (!(peopleFileMap || {})[canonicalName]) continue
+			const score = fuzzyMatch(query, alias)
+			if (score > 0 && (!bestByPerson[canonicalName] || score > bestByPerson[canonicalName].score)) {
+				bestByPerson[canonicalName] = { score, matchedAlias: alias }
+			}
+		}
+	}
+
+	// Sort by fuzzy score, take top N for expensive boost calculation
+	let fuzzyResults = Object.entries(bestByPerson).map(([name, data]) => ({ name, ...data }))
+	fuzzyResults.sort((a, b) => b.score - a.score)
+	const topCandidates = fuzzyResults.slice(0, BOOST_CUTOFF)
+
+	// Second pass: add scoring boost (backlinks + recency) only for top candidates
+	for (const candidate of topCandidates) {
+		candidate.score += getScoringBoost(app, peopleFileMap[candidate.name])
+	}
+
+	// Re-sort with boost and take final 20
+	topCandidates.sort((a, b) => b.score - a.score)
+	return topCandidates.slice(0, 20).map(s => ({ name: s.name, matchedAlias: s.matchedAlias }))
+}
+
+/**
  * Modal to select a person from selected text
  * Allows converting highlighted text into a person link
  */
@@ -610,45 +660,8 @@ class PersonSuggestModal extends SuggestModal {
 	getSuggestions(query) {
 		if (!query) query = this.initialQuery
 
-		const bestByPerson = {}
-
-		// First pass: cheap fuzzy matching against names
-		for (let key in (this.peopleFileMap || {})) {
-			const score = fuzzyMatch(query, key)
-			if (score > 0) {
-				bestByPerson[key] = { score, matchedAlias: null }
-			}
-		}
-
-		// Also match against aliases (still cheap — just fuzzyMatch)
-		if (this.settings.useAliases) {
-			for (let alias in (this.aliasMap || {})) {
-				const canonicalName = this.aliasMap[alias]
-				if (!(this.peopleFileMap || {})[canonicalName]) continue
-				const score = fuzzyMatch(query, alias)
-				if (score > 0 && (!bestByPerson[canonicalName] || score > bestByPerson[canonicalName].score)) {
-					bestByPerson[canonicalName] = { score, matchedAlias: alias }
-				}
-			}
-		}
-
-		// Sort by fuzzy score, take top N for expensive boost calculation
-		let fuzzyResults = Object.entries(bestByPerson).map(([name, data]) => ({ name, ...data }))
-		fuzzyResults.sort((a, b) => b.score - a.score)
-		const topCandidates = fuzzyResults.slice(0, BOOST_CUTOFF)
-
-		// Second pass: add scoring boost (backlinks + recency) only for top candidates
-		for (const candidate of topCandidates) {
-			candidate.score += getScoringBoost(this.app, this.peopleFileMap[candidate.name])
-		}
-
-		// Re-sort with boost and take final 20
-		topCandidates.sort((a, b) => b.score - a.score)
-		let suggestions = topCandidates.slice(0, 20).map(s => ({
-			type: 'existing',
-			name: s.name,
-			matchedAlias: s.matchedAlias,
-		}))
+		const suggestions = rankPeople(this.app, query, this.peopleFileMap, this.aliasMap, this.settings.useAliases)
+			.map(s => ({ type: 'existing', name: s.name, matchedAlias: s.matchedAlias }))
 
 		suggestions.push({ type: 'create', name: query })
 		return suggestions
@@ -759,46 +772,8 @@ class AtPeopleSuggestor extends EditorSuggest {
 	 * person file on every keystroke.
 	 */
 	getSuggestions(context) {
-		const bestByPerson = {}
-
-		// First pass: cheap fuzzy matching against names
-		for (let key in (this.peopleFileMap || {})) {
-			const score = fuzzyMatch(context.query, key)
-			if (score > 0) {
-				bestByPerson[key] = { score, matchedAlias: null }
-			}
-		}
-
-		// Also match against aliases (still cheap — just fuzzyMatch)
-		if (this.plugin.settings.useAliases) {
-			for (let alias in (this.aliasMap || {})) {
-				const canonicalName = this.aliasMap[alias]
-				if (!(this.peopleFileMap || {})[canonicalName]) continue
-				const score = fuzzyMatch(context.query, alias)
-				if (score > 0 && (!bestByPerson[canonicalName] || score > bestByPerson[canonicalName].score)) {
-					bestByPerson[canonicalName] = { score, matchedAlias: alias }
-				}
-			}
-		}
-
-		// Sort by fuzzy score, take top N for expensive boost calculation
-		let fuzzyResults = Object.entries(bestByPerson).map(([name, data]) => ({ name, ...data }))
-		fuzzyResults.sort((a, b) => b.score - a.score)
-		const topCandidates = fuzzyResults.slice(0, BOOST_CUTOFF)
-
-		// Second pass: add scoring boost (backlinks + recency) only for top candidates
-		for (const candidate of topCandidates) {
-			candidate.score += getScoringBoost(this.app, this.peopleFileMap[candidate.name])
-		}
-
-		// Re-sort with boost and take final 20
-		topCandidates.sort((a, b) => b.score - a.score)
-		let suggestions = topCandidates.slice(0, 20).map(s => ({
-			suggestionType: 'set',
-			displayText: s.name,
-			matchedAlias: s.matchedAlias,
-			context,
-		}))
+		const suggestions = rankPeople(this.app, context.query, this.peopleFileMap, this.aliasMap, this.plugin.settings.useAliases)
+			.map(s => ({ suggestionType: 'set', displayText: s.name, matchedAlias: s.matchedAlias, context }))
 
 		suggestions.push({ suggestionType: 'create', displayText: context.query, context })
 		return suggestions
@@ -964,7 +939,7 @@ class AtPeopleSettingTab extends PluginSettingTab {
 			strong.textContent = label
 			return strong
 		}
-		aliasLine("Use a person's alias as the visible link text. A link to @john-doe then shows as John Doe, while still pointing to the file.")
+		aliasLine("Use a person's alias as the visible link text. If @john-doe has the alias \"Uncle John\", the link then shows as Uncle John while still pointing to the file.")
 		aliasLine('')
 		aliasLine(aliasOption('Off'), ': always show the file name.')
 		aliasLine(aliasOption('Always prefer alias'), ': show the alias whenever the person has one.')

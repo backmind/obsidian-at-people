@@ -3,6 +3,9 @@
   "version": "1.7.0",
   "description": "Use the @ to create links to people files with smart fuzzy search, accent-insensitive matching, and backlink-based ranking.",
   "main": "main.js",
+  "scripts": {
+    "test": "node test/test-trigger.js"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/backmind/obsidian-at-people.git"

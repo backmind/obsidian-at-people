@@ -20,7 +20,7 @@ A lightweight Obsidian plugin that lets you mention people with `@`, just like y
 - **Alias as display text** — optionally show a person's alias as the visible link text (e.g. a link to `@john-doe` displays as `Uncle John`) while the link still points to the file (opt-in)
 - **Backlink-based ranking** — people you reference often appear higher in suggestions, with a slight recency boost for recently edited notes
 - **Triggers next to punctuation** — the `@` works glued to symbols such as `(@jo`, `"@jo` or `-@jo`, not just after a space. Emails like `name@host` are left alone, and so is an `@` used as a word: `Cena @ 21:00` never opens the suggester, since a mention has its name glued to the `@`
-- **Stays out of code** — suggestions never open inside a code block, an inline code span, YAML frontmatter, math, or an existing `[[wikilink]]`, so `@decorator`, `@media` or `@types/node` in your notes are left alone
+- **Stays out of code** — suggestions never open inside a code block, an inline code span, YAML frontmatter, math, or an existing `[[wikilink]]`, so `@decorator`, `@media` or `@types/node` written *inside code* are left alone (in prose they still work)
 - **Ready for the next word** — optionally leave a space after an inserted link so you can keep typing, skipped when a space or a closing symbol already follows (opt-in)
 - **Clean names for new people** — when creating a person, surrounding spaces (the ones phone keyboards add when accepting a word) are trimmed, repeated spaces are collapsed, and characters that no file name accepts (`\ / : * ? " < > |`) or that would break the wikilink (`# ^ [ ]`) are removed, so `@ John  Doe ` creates `@John Doe.md` and not a broken link or a look-alike duplicate. The suggestion shows the exact name that will be created; existing people are always linked by their real file name
 - **Link selected text** — select any text, run the command **"At People: Link selected text to person"** from the palette, and convert it into a person link instantly. Assign a hotkey (e.g. `Ctrl+Shift+A`) for even faster linking.
@@ -175,6 +175,12 @@ Don't want to write CSS? Enable **Style person links as pills** in settings for 
 ## How ranking works
 
 Results are ranked by combining three factors: how closely the query matches the name (with a slight preference for shorter, more precise matches), how often the person is referenced across your vault, and a light recency boost for recently edited person notes. Frequently mentioned people naturally rise to the top, while still respecting the relevance of your current query.
+
+## Troubleshooting
+
+**Suggestions stopped opening in a note.** The `@` is ignored inside code, frontmatter and math, and an *unclosed* `$$` or code fence makes everything below it count as math or code, in the editor's eyes as much as the plugin's. Look for a stray `$$` or ``` above the spot. The **"Link selected text to person"** command works anywhere, so you can still link while you sort the note out.
+
+**Suggestions won't come back for one `@`.** Pressing `Esc` dismisses that specific `@` on purpose. Type a new one, or move to another line, and it returns.
 
 ## Conflicts
 

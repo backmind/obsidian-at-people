@@ -61,6 +61,13 @@ const ILLEGAL_NAME_CHARS = /[\\/:*?"<>|#^[\]]/g
 // editor code, which tests them the same way.
 const NON_PROSE_TOKENS = ['hmd-codeblock', 'inline-code', 'hmd-frontmatter', 'math', 'hmd-internal-link']
 
+// A node's stream-parser classes, whichever way Obsidian exposes them: through
+// tokenClassNodeProp they come space-separated (e.g. "hmd-codeblock keyword"),
+// while the node name carries the same classes joined by underscores, because
+// CodeMirror builds it as style.replace(/ /g, '_'). Callers must be inside a
+// try/catch or hold a node they trust: a node type can be absent entirely.
+const tokenClassesOf = (node) => (node.type.prop(tokenClassNodeProp) || node.type.name || '').split(/[\s_]+/)
+
 /**
  * Normalize a raw query into the name of a person to CREATE.
  *
@@ -444,15 +451,13 @@ function buildPersonLinkExtension(plugin) {
 						from,
 						to,
 						enter: (node) => {
-							// Obsidian joins a node's stream-parser token classes with
-							// underscores in the type name, e.g.
-							// "hmd-internal-link_link-alias_strong". Split them back out
-							// to test individual classes. The `[[`/`]]` brackets are
-							// separate "formatting-link" tokens with no
-							// "hmd-internal-link" class, so they are skipped here (this
-							// is why a bracket-based regex over the token range fails —
-							// the token covers only the inner text).
-							const classes = new Set(node.type.name.split('_'))
+							// Test individual stream-parser classes (see
+							// tokenClassesOf). The `[[`/`]]` brackets are separate
+							// "formatting-link" tokens with no "hmd-internal-link"
+							// class, so they are skipped here (this is why a
+							// bracket-based regex over the token range fails: the
+							// token covers only the inner text).
+							const classes = new Set(tokenClassesOf(node))
 							if (!classes.has('hmd-internal-link')) return
 							if (classes.has('link-alias-pipe')) return // the "|" separator
 
@@ -791,6 +796,10 @@ class AtPeopleSuggestor extends EditorSuggest {
 			this.dismissedTrigger = {
 				// Coordinates alone would suppress the same spot in every other
 				// note, so the veto is scoped to the file it happened in.
+				// Obsidian builds the context with the very file it passes to
+				// onTrigger, so the two sides can never disagree. An editor with
+				// no file (a canvas card) falls back to '', sharing one bucket
+				// with every other file-less editor: harmless and very rare.
 				path: (this.context.file && this.context.file.path) || '',
 				line: this.context.start.line,
 				ch: this.context.start.ch,
@@ -848,15 +857,15 @@ class AtPeopleSuggestor extends EditorSuggest {
 	 * Whether a mention may start at this position, that is, the position is
 	 * prose and not code, frontmatter, math or an existing wikilink.
 	 *
-	 * Obsidian exposes a node's stream-parser classes as a space-separated
-	 * string through tokenClassNodeProp, and reads them the same way internally
-	 * (`new Set(prop.split(' ')).has('hmd-codeblock')`). Inside a fenced block
-	 * with language highlighting the token carries both, e.g.
-	 * "hmd-codeblock keyword", hence the class-by-class test. The node name is
-	 * used as a fallback, where the same classes come joined by underscores.
+	 * Obsidian reads these classes the same way internally
+	 * (`new Set(prop.split(' ')).has('hmd-codeblock')`), and inside a fenced
+	 * block with language highlighting a token carries both the language class
+	 * and "hmd-codeblock", hence the class-by-class test (see tokenClassesOf).
 	 *
-	 * Fails OPEN on anything unexpected (no CM6 view, no tree, an API that
-	 * moved): a failed tree read must never silence the suggester.
+	 * Fails OPEN on anything unexpected (no CM6 view, no tree, a node without a
+	 * type, an API that moved): a failed tree read must never silence the
+	 * suggester. syntaxTree() only reads a state field, so this costs nothing
+	 * per keystroke, and it runs only once findMention already found a candidate.
 	 */
 	isProseAt(pos, editor) {
 		try {
@@ -864,9 +873,10 @@ class AtPeopleSuggestor extends EditorSuggest {
 			if (!view || !editor.posToOffset) return true
 			const tree = syntaxTree(view.state)
 			if (!tree || !tree.resolveInner) return true
+			// Walk up: inside a highlighted fence the leaf is a language token
+			// and "hmd-codeblock" sits on an ancestor.
 			for (let node = tree.resolveInner(editor.posToOffset(pos), 1); node; node = node.parent) {
-				const raw = node.type.prop(tokenClassNodeProp) || node.type.name || ''
-				if (raw.split(/[\s_]+/).some(c => NON_PROSE_TOKENS.includes(c))) return false
+				if (tokenClassesOf(node).some(c => NON_PROSE_TOKENS.includes(c))) return false
 			}
 			return true
 		} catch (e) {

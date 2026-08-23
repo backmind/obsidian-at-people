@@ -59,9 +59,35 @@ If your people files don't use `@` (e.g. you already have a folder of contacts n
 
 ## Configuration
 
+Settings follow the same order as the plugin's settings tab: **Files & folders**, **Links**, **Aliases**, **Appearance**.
+
 ### People folder
 
 Set the folder where your person files live (e.g. `People/`, `Contacts/`, `Reference/People/`). The plugin scans this folder and all subfolders for person files.
+
+### Folder mode
+
+Choose how person files are organized:
+
+| Mode | Structure | Example link |
+|------|-----------|-------------|
+| **Default** | One file per person | `[[People/@John Doe.md\|@John Doe]]` |
+| **Per Person** | A folder per person (for related notes) | `[[People/@John Doe/@John Doe.md\|@John Doe]]` |
+| **Per Lastname** | Grouped by last name | `[[People/Doe/@John Doe.md\|@John Doe]]` |
+
+Per Person and Per Lastname modes require Explicit links to be enabled.
+
+> **Note on last names**: the plugin takes the last word of the name as the last name. "Charles Le Fabre" becomes "Fabre", not "Le Fabre".
+
+### Auto-create files
+
+When enabled, selecting a suggestion automatically creates the person file (and any necessary folders) in your configured people folder. When disabled, the plugin inserts the link but you need to create the file yourself.
+
+> **Tip**: If you use [Templater](https://github.com/SilentVoid13/Templater), you can assign a template to your people folder in Templater's settings (*Folder Templates*). Every new person file created by At People will then be pre-filled with your template automatically.
+
+### Require @ prefix
+
+Enabled by default. When enabled, only files starting with `@` are recognized as people. When disabled, all `.md` files in the people folder are treated as people. See [file naming](#important-file-naming) for details.
 
 ### Explicit links
 
@@ -77,25 +103,11 @@ Enable **Explicit links** to include the full path:
 [[People/@John Doe.md|@John Doe]]
 ```
 
-### Auto-create files
+### Add a space after the link
 
-When enabled, selecting a suggestion automatically creates the person file (and any necessary folders) in your configured people folder. When disabled, the plugin inserts the link but you need to create the file yourself.
+Disabled by default. When enabled, a space is left after an inserted link so you can keep typing straight away, which saves a keystroke on a phone keyboard.
 
-> **Tip**: If you use [Templater](https://github.com/SilentVoid13/Templater), you can assign a template to your people folder in Templater's settings (*Folder Templates*). Every new person file created by At People will then be pre-filled with your template automatically.
-
-### Folder mode
-
-Choose how person files are organized:
-
-| Mode | Structure | Example link |
-|------|-----------|-------------|
-| **Default** | One file per person | `[[People/@John Doe.md\|@John Doe]]` |
-| **Per Person** | A folder per person (for related notes) | `[[People/@John Doe/@John Doe.md\|@John Doe]]` |
-| **Per Lastname** | Grouped by last name | `[[People/Doe/@John Doe.md\|@John Doe]]` |
-
-Per Person and Per Lastname modes require Explicit links to be enabled.
-
-> **Note on last names**: the plugin takes the last word of the name as the last name. "Charles Le Fabre" becomes "Fabre", not "Le Fabre".
+The space is skipped when the text after the link already starts with a space or with a closing symbol such as `)` or `,`. It cannot know about a mark you type *afterwards*, though: with this on, typing `@john` and then `.` gives `[[@John Doe]] .` with the period pushed away from the link. Leave it off if you often end sentences with a mention.
 
 ### Include aliases
 
@@ -121,19 +133,13 @@ Off by default, and only available when **Include aliases** is enabled. Controls
 
 For example, if `@john-doe.md` has the alias `Uncle John`, the inserted link becomes `[[@john-doe|Uncle John]]`. A person with no alias always uses the file name.
 
-### Require @ prefix
-
-Enabled by default. When enabled, only files starting with `@` are recognized as people. When disabled, all `.md` files in the people folder are treated as people. See [file naming](#important-file-naming) for details.
-
-### Add a space after the link
-
-Disabled by default. When enabled, a space is left after an inserted link so you can keep typing straight away, which saves a keystroke on a phone keyboard.
-
-The space is skipped when the text after the link already starts with a space or with a closing symbol such as `)` or `,`. It cannot know about a mark you type *afterwards*, though: with this on, typing `@john` and then `.` gives `[[@John Doe]] .` with the period pushed away from the link. Leave it off if you often end sentences with a mention.
-
 ### Style person links as pills
 
 Disabled by default. When enabled, person links are shown as tag-style pills in Reading view and Live Preview, reusing your theme's tag colors (a pill with `@` instead of `#`). Prefer your own look? See [Styling person links](#styling-person-links) below.
+
+### Reset to defaults
+
+A button at the bottom of the settings tab restores every setting to its default value. It asks for a second click to confirm, so a stray tap cannot wipe your configuration.
 
 ## Styling person links
 
@@ -177,7 +183,7 @@ Some plugins conflict with the `@` symbol. Check the [known plugin conflicts](ht
 
 | | **At People** | **[At Symbol Linking](https://github.com/Ebonsignori/obsidian-at-symbol-linking)** |
 |---|---|---|
-| Size | ~37 KB | ~145 KB |
+| Size | ~45 KB | ~145 KB |
 | Focus | People only | Multiple entity types |
 | Multi-symbol support | `@` only | `@`, `$`, etc. mapped to different folders |
 | Alias support | Yes (frontmatter) | Yes |

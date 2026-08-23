@@ -27,19 +27,26 @@ const NAME_REGEX_NO_AT = /\/([^\/]+)\.md$/   // Without @ prefix: "People/John D
 // Regex to extract last name (last word after splitting by spaces)
 const LAST_NAME_REGEX = /([\S]+)$/
 
-// Characters that must NOT precede the '@' for a mention to start. Everything
-// else (whitespace, parentheses, quotes, dashes, brackets, punctuation) counts
-// as a word boundary, so "(@Jo" or "-@Jo" trigger just like " @Jo" does.
-//   \p{L}\p{N}_ - keeps emails and handles quiet ("name@host", "José@...")
-//   @           - avoids re-triggering on the second '@' of "@@"
-//   [           - typing inside a wikilink belongs to Obsidian's own suggester
-const MENTION_BLOCKED_PREFIX = /[\p{L}\p{N}_@\[]/u
+// Endings of the text before the '@' that must NOT start a mention. Everything
+// else (whitespace, parentheses, quotes, dashes, punctuation) counts as a word
+// boundary, so "(@Jo" or "-@Jo" trigger just like " @Jo" does.
+//   \p{L}\p{M}\p{N}_ - keeps emails and handles quiet ("name@host", "José@...",
+//                      including NFD text, where the accent is a combining mark)
+//   @                - avoids re-triggering on the second '@' of "@@"
+//   [                - typing inside a wikilink belongs to Obsidian's own
+//                      suggester (and "[@doe2019" is a Pandoc citation)
+//   `                - "`@param" is inline code, not a mention
+// Anchored and tested against the whole prefix so the last CHARACTER is
+// inspected: indexing the string would split surrogate pairs (astral letters)
+// into units that \p{L} cannot match.
+const MENTION_BLOCKED_PREFIX = /[\p{L}\p{M}\p{N}_@\[`]$/u
 
 // Used only when the "Add a space after the link" setting is on: what may
 // directly follow an inserted link without a space between them. Whitespace (so
-// the added space never doubles up) plus closers and punctuation that would read
-// as a typo if pushed away from the link.
-const NO_TRAILING_SPACE_BEFORE = /^[\s)\]}>»"'`,.;:!?]/
+// the added space never doubles up) plus closers and punctuation, including the
+// typographic and CJK forms, that would read as a typo if pushed away from the
+// link.
+const NO_TRAILING_SPACE_BEFORE = /^[\s)\]}>»"'`’”,.;:!?…、。，：；！？）】」』]/
 
 // Characters a person's name can never contain: they are illegal in a file name
 // on at least one platform (\ / : * ? " < >) or they break the [[wikilink]] the
@@ -72,8 +79,7 @@ const ILLEGAL_NAME_CHARS = /[\\/:*?"<>|#^[\]]/g
 const normalizeNewPersonName = (query) => (query || '')
 	.replace(ILLEGAL_NAME_CHARS, '')
 	.replace(/\s+/g, ' ')
-	.trim()
-	.replace(/^@+/, '')
+	.replace(/^[@\s]+/, '')
 	.trim()
 
 // Ensure folder path ends with a trailing slash
@@ -824,7 +830,7 @@ class AtPeopleSuggestor extends EditorSuggest {
 		// trailing one, which is what a phone keyboard appends when it accepts a
 		// word.
 		if (!/^\S/.test(query) || query.includes(']]')) return null
-		if (atIndex > 0 && MENTION_BLOCKED_PREFIX.test(charsLeftOfCursor[atIndex - 1])) return null
+		if (atIndex > 0 && MENTION_BLOCKED_PREFIX.test(charsLeftOfCursor.slice(0, atIndex))) return null
 		return { atIndex, query }
 	}
 

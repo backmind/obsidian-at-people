@@ -4,8 +4,9 @@ const { AbstractInputSuggest, EditorSuggest, SuggestModal, Notice, Plugin, Plugi
 const { ViewPlugin, Decoration } = require('@codemirror/view')
 const { RangeSetBuilder } = require('@codemirror/state')
 // tokenClassNodeProp exposes Obsidian's stream-parser token classes (e.g.
-// "hmd-internal-link", "link-alias"). These are NOT available via
-// node.type.name, so we must read them through this node-type prop.
+// "hmd-internal-link", "link-alias"). Read through this node-type prop they
+// come space-separated, which is how Obsidian's own editor code reads them;
+// node.type.name carries the same classes joined by underscores.
 const { syntaxTree, tokenClassNodeProp } = require('@codemirror/language')
 
 // Default plugin configuration
@@ -53,6 +54,19 @@ const NO_TRAILING_SPACE_BEFORE = /^[\s)\]}>»"'`’”,.;:!?…、。，：；�
 // person is referenced with (# ^ | [ ]). Dropped rather than replaced, so the
 // rest of what was typed survives verbatim.
 const ILLEGAL_NAME_CHARS = /[\\/:*?"<>|#^[\]]/g
+
+// Stream-parser token classes that mean the '@' is not prose, so no mention
+// starts there: fenced or indented code, an inline code span, YAML frontmatter,
+// math, and the inside of an existing wikilink. Names taken from Obsidian's own
+// editor code, which tests them the same way.
+const NON_PROSE_TOKENS = ['hmd-codeblock', 'inline-code', 'hmd-frontmatter', 'math', 'hmd-internal-link']
+
+// A node's stream-parser classes, whichever way Obsidian exposes them: through
+// tokenClassNodeProp they come space-separated (e.g. "hmd-codeblock keyword"),
+// while the node name carries the same classes joined by underscores, because
+// CodeMirror builds it as style.replace(/ /g, '_'). Callers must be inside a
+// try/catch or hold a node they trust: a node type can be absent entirely.
+const tokenClassesOf = (node) => (node.type.prop(tokenClassNodeProp) || node.type.name || '').split(/[\s_]+/)
 
 /**
  * Normalize a raw query into the name of a person to CREATE.
@@ -437,15 +451,13 @@ function buildPersonLinkExtension(plugin) {
 						from,
 						to,
 						enter: (node) => {
-							// Obsidian joins a node's stream-parser token classes with
-							// underscores in the type name, e.g.
-							// "hmd-internal-link_link-alias_strong". Split them back out
-							// to test individual classes. The `[[`/`]]` brackets are
-							// separate "formatting-link" tokens with no
-							// "hmd-internal-link" class, so they are skipped here (this
-							// is why a bracket-based regex over the token range fails —
-							// the token covers only the inner text).
-							const classes = new Set(node.type.name.split('_'))
+							// Test individual stream-parser classes (see
+							// tokenClassesOf). The `[[`/`]]` brackets are separate
+							// "formatting-link" tokens with no "hmd-internal-link"
+							// class, so they are skipped here (this is why a
+							// bracket-based regex over the token range fails: the
+							// token covers only the inner text).
+							const classes = new Set(tokenClassesOf(node))
 							if (!classes.has('hmd-internal-link')) return
 							if (classes.has('link-alias-pipe')) return // the "|" separator
 
@@ -782,6 +794,13 @@ class AtPeopleSuggestor extends EditorSuggest {
 	close() {
 		if (this.context && !this._selectionMade && !this.lastListWasEmpty && this.isMentionUnderCursor()) {
 			this.dismissedTrigger = {
+				// Coordinates alone would suppress the same spot in every other
+				// note, so the veto is scoped to the file it happened in.
+				// Obsidian builds the context with the very file it passes to
+				// onTrigger, so the two sides can never disagree. An editor with
+				// no file (a canvas card) falls back to '', sharing one bucket
+				// with every other file-less editor: harmless and very rare.
+				path: (this.context.file && this.context.file.path) || '',
 				line: this.context.start.line,
 				ch: this.context.start.ch,
 			}
@@ -835,16 +854,52 @@ class AtPeopleSuggestor extends EditorSuggest {
 	}
 
 	/**
+	 * Whether a mention may start at this position, that is, the position is
+	 * prose and not code, frontmatter, math or an existing wikilink.
+	 *
+	 * Obsidian reads these classes the same way internally
+	 * (`new Set(prop.split(' ')).has('hmd-codeblock')`), and inside a fenced
+	 * block with language highlighting a token carries both the language class
+	 * and "hmd-codeblock", hence the class-by-class test (see tokenClassesOf).
+	 *
+	 * Fails OPEN on anything unexpected (no CM6 view, no tree, a node without a
+	 * type, an API that moved): a failed tree read must never silence the
+	 * suggester. syntaxTree() only reads a state field, so this costs nothing
+	 * per keystroke, and it runs only once findMention already found a candidate.
+	 */
+	isProseAt(pos, editor) {
+		try {
+			const view = editor.cm
+			if (!view || !editor.posToOffset) return true
+			const tree = syntaxTree(view.state)
+			if (!tree || !tree.resolveInner) return true
+			// Walk up: inside a highlighted fence the leaf is a language token
+			// and "hmd-codeblock" sits on an ancestor.
+			for (let node = tree.resolveInner(editor.posToOffset(pos), 1); node; node = node.parent) {
+				if (tokenClassesOf(node).some(c => NON_PROSE_TOKENS.includes(c))) return false
+			}
+			return true
+		} catch (e) {
+			return true
+		}
+	}
+
+	/**
 	 * Detect when to trigger the suggester
 	 */
 	onTrigger(cursor, editor, tFile) {
 		const mention = this.findMention(cursor, editor)
+		const filePath = (tFile && tFile.path) || ''
 
-		if (mention) {
+		// The '@' anchors the mention, so that is the position that decides
+		// whether this is prose: the cursor may already have moved past a
+		// closing backtick while the '@' sits inside the code span.
+		if (mention && this.isProseAt({ line: cursor.line, ch: mention.atIndex }, editor)) {
 			const { atIndex, query } = mention
 			// Skip if this '@' was dismissed with Escape
 			if (
 				this.dismissedTrigger
+				&& this.dismissedTrigger.path === filePath
 				&& this.dismissedTrigger.line === cursor.line
 				&& this.dismissedTrigger.ch === atIndex
 			) {
@@ -860,8 +915,12 @@ class AtPeopleSuggestor extends EditorSuggest {
 			}
 		}
 
-		// Clear dismissed state when cursor moves to a different line
-		if (this.dismissedTrigger && this.dismissedTrigger.line !== cursor.line) {
+		// Clear dismissed state once the cursor is somewhere the veto cannot
+		// apply any more: another file, or another line of the same one.
+		if (
+			this.dismissedTrigger
+			&& (this.dismissedTrigger.path !== filePath || this.dismissedTrigger.line !== cursor.line)
+		) {
 			this.dismissedTrigger = null
 		}
 

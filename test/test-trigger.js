@@ -38,12 +38,49 @@ const obsidianStub = {
 	editorLivePreviewField: {},
 	editorInfoField: {},
 }
+// Fake syntax tree, placed over document offsets so a test can prove WHICH
+// position the plugin inspects, not merely that it reacts to a token.
+//
+// `tokenState.ranges` holds [from, to, spec] entries and resolveInner honours
+// the `side` argument the way lezer does: with side > 0 a token that merely
+// ends at the offset does not match. A spec is either a class string, or
+// { classes, parent } to nest nodes, { classes, nameOnly: true } to hide the
+// prop, or { broken } for hostile shapes.
+//
+// Obsidian exposes a node's stream-parser classes as a space-separated string
+// through tokenClassNodeProp; CM6 builds the node name from that same string
+// with the spaces turned into underscores, so the fake mirrors both shapes.
+const tokenState = { ranges: [], throws: false }
+const makeNode = (spec) => {
+	if (typeof spec === 'string') spec = { classes: spec }
+	if (spec.broken === 'type') return { parent: null, type: undefined }
+	if (spec.broken === 'prop') return { parent: null, type: { name: 'x', prop: 'not a function' } }
+	return {
+		parent: spec.parent ? makeNode(spec.parent) : null,
+		type: {
+			name: spec.classes.split(' ').join('_'),
+			prop: (p) => spec.nameOnly ? undefined : (p === cmStub.tokenClassNodeProp ? spec.classes : undefined),
+		},
+	}
+}
 const cmStub = {
 	ViewPlugin: { fromClass: () => ({}) },
 	Decoration: { mark: () => ({}) },
 	RangeSetBuilder: class { add() {} finish() { return {} } },
-	syntaxTree: () => ({ iterate() {} }),
-	tokenClassNodeProp: {},
+	syntaxTree: () => {
+		if (tokenState.throws === 'throw') throw new Error('syntax tree unavailable')
+		if (tokenState.throws === 'no-resolveInner') return { iterate() {} }
+		return {
+			iterate() {},
+			resolveInner: (offset, side) => {
+				const hit = tokenState.ranges.find(([from, to]) => side > 0
+					? offset >= from && offset < to
+					: offset > from && offset <= to)
+				return hit ? makeNode(hit[2]) : null
+			},
+		}
+	},
+	tokenClassNodeProp: { name: 'tokenClass' },
 }
 
 const origLoad = Module._load
@@ -246,6 +283,84 @@ const main = async () => {
 	type('hola @jo')
 	clickAt(0)
 	check('clicking away is not a dismissal', type('hola @joh'), 'q="joh"')
+
+	console.log('\n--- Mentions only in prose, not in code/frontmatter/math ---')
+	// An editor exposing a CM6 view, so the syntax check runs at all. Without
+	// `cm` (every other test here) the check must fail open and trigger.
+	const cmEditorFor = (line, extra) => Object.assign({
+		getLine: () => line,
+		cm: { state: {} },
+		posToOffset: (pos) => pos.ch,
+	}, extra)
+	// `ranges` are offsets over `line`, so these assertions pin down which
+	// position the plugin inspects, not just that it reacts to some token.
+	const triggerWith = (line, ch, ranges, opts = {}) => {
+		tokenState.ranges = ranges
+		tokenState.throws = opts.throws || false
+		suggestor.dismissedTrigger = null
+		const r = suggestor.onTrigger({ line: 0, ch }, cmEditorFor(line, opts.editor), null)
+		return r ? `q=${r.query}` : null
+	}
+	// "@Jo" with the '@' at offset 0 and the whole line inside one token.
+	const wholeLine = (classes) => triggerWith('@Jo', 3, [[0, 3, classes]])
+
+	check('fenced code block', wholeLine('hmd-codeblock'), null)
+	check('code block with highlighting', wholeLine('hmd-codeblock keyword'), null)
+	check('inline code', wholeLine('inline-code'), null)
+	check('YAML frontmatter', wholeLine('hmd-frontmatter'), null)
+	check('math', wholeLine('math'), null)
+	check('inside an existing wikilink', wholeLine('hmd-internal-link'), null)
+	check('plain prose still triggers', wholeLine(''), 'q=Jo')
+	check('bold prose still triggers', wholeLine('strong em'), 'q=Jo')
+	check('no token at all still triggers', triggerWith('@Jo', 3, []), 'q=Jo')
+	// Substring lookalikes must not suppress: classes are compared whole.
+	check('"mathematica" is not math', wholeLine('mathematica'), 'q=Jo')
+	check('"inline-code-block" is not inline code', wholeLine('inline-code-block'), 'q=Jo')
+
+	// The '@' decides, not the cursor: here the cursor has already moved past
+	// the closing backtick, so a cursor-based check would let this through.
+	//        0123456789..     ranges cover the code span, offsets 5..12
+	check('code span, cursor past the closer', triggerWith('mira `x @Jo`', 12, [[5, 12, 'inline-code']]), null)
+	// side = 1: a token that merely ENDS at the '@' must not suppress it.
+	check('token ending at the @ does not suppress', triggerWith('texto @Jo', 9, [[0, 6, 'inline-code']]), 'q=Jo')
+	// The class may sit on an ancestor: inside a highlighted fence the leaf is
+	// a language token and 'hmd-codeblock' is above it.
+	check('class on an ancestor node', triggerWith('@Jo', 3, [[0, 3, { classes: 'VariableName', parent: { classes: 'hmd-codeblock' } }]]), null)
+	// Fallback path: no prop, classes only in the underscore-joined node name.
+	check('classes read from the node name', triggerWith('@Jo', 3, [[0, 3, { classes: 'hmd-codeblock keyword', nameOnly: true }]]), null)
+
+	// Fail open: nothing about a tree read may silence the suggester.
+	check('tree that throws', triggerWith('@Jo', 3, [[0, 3, 'hmd-codeblock']], { throws: 'throw' }), 'q=Jo')
+	check('tree without resolveInner', triggerWith('@Jo', 3, [[0, 3, 'hmd-codeblock']], { throws: 'no-resolveInner' }), 'q=Jo')
+	check('node without a type', triggerWith('@Jo', 3, [[0, 3, { broken: 'type' }]]), 'q=Jo')
+	check('type.prop not a function', triggerWith('@Jo', 3, [[0, 3, { broken: 'prop' }]]), 'q=Jo')
+	check('posToOffset that throws', triggerWith('@Jo', 3, [[0, 3, 'hmd-codeblock']], {
+		editor: { posToOffset: () => { throw new Error('detached') } },
+	}), 'q=Jo')
+	check('editor without a CM6 view', triggerWith('@Jo', 3, [[0, 3, 'hmd-codeblock']], { editor: { cm: null } }), 'q=Jo')
+	tokenState.ranges = []
+	tokenState.throws = false
+
+	console.log('\n--- The Escape veto is per file ---')
+	const fileA = { path: 'Notes/A.md' }
+	const fileB = { path: 'Notes/B.md' }
+	const dismissIn = (file) => {
+		suggestor.dismissedTrigger = null
+		const ed = { getLine: () => '@Jo', getCursor: () => ({ line: 0, ch: 3 }) }
+		suggestor.onTrigger({ line: 0, ch: 3 }, ed, file)
+		suggestor.context = { editor: ed, file, start: { line: 0, ch: 0 }, end: { line: 0, ch: 3 }, query: 'Jo' }
+		suggestor.close()
+		suggestor.context = null
+	}
+	const triggersIn = (file) => {
+		const r = suggestor.onTrigger({ line: 0, ch: 4 }, { getLine: () => '@Joh' }, file)
+		return r ? `q=${r.query}` : null
+	}
+
+	dismissIn(fileA)
+	check('same file, same spot: still vetoed', triggersIn(fileA), null)
+	dismissIn(fileA)
+	check('other file, same spot: not vetoed', triggersIn(fileB), 'q=Joh')
 
 	console.log('\n--- "New person" name: trim + illegal characters ---')
 	// Returns the displayText of the 'create' entry, or null when there is none.

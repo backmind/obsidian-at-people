@@ -19,6 +19,9 @@ A lightweight Obsidian plugin that lets you mention people with `@`, just like y
 - **Frontmatter aliases** — match people by nicknames or alternate names defined in their YAML frontmatter (opt-in)
 - **Alias as display text** — optionally show a person's alias as the visible link text (e.g. a link to `@john-doe` displays as `Uncle John`) while the link still points to the file (opt-in)
 - **Backlink-based ranking** — people you reference often appear higher in suggestions, with a slight recency boost for recently edited notes
+- **Triggers next to punctuation** — the `@` works glued to symbols such as `(@jo`, `"@jo` or `-@jo`, not just after a space. Emails like `name@host` are left alone, and so is an `@` used as a word: `Cena @ 21:00` never opens the suggester, since a mention has its name glued to the `@`
+- **Ready for the next word** — optionally leave a space after an inserted link so you can keep typing, skipped when a space or a closing symbol already follows (opt-in)
+- **Clean names for new people** — when creating a person, surrounding spaces (the ones phone keyboards add when accepting a word) are trimmed, repeated spaces are collapsed, and characters that no file name accepts (`\ / : * ? " < > | # ^ [ ]`) are removed, so `@ John  Doe ` creates `@John Doe.md` and not a broken link or a look-alike duplicate. The suggestion shows the exact name that will be created; existing people are always linked by their real file name
 - **Link selected text** — select any text, run the command **"At People: Link selected text to person"** from the palette, and convert it into a person link instantly. Assign a hotkey (e.g. `Ctrl+Shift+A`) for even faster linking.
 - **Dismiss with Escape** — press `Esc` to dismiss suggestions; they won't reappear until you type a new `@`
 - **Auto-create files** — optionally create person files and folders on the fly when selecting a suggestion
@@ -121,6 +124,12 @@ For example, if `@john-doe.md` has the alias `Uncle John`, the inserted link bec
 ### Require @ prefix
 
 Enabled by default. When enabled, only files starting with `@` are recognized as people. When disabled, all `.md` files in the people folder are treated as people. See [file naming](#important-file-naming) for details.
+
+### Add a space after the link
+
+Disabled by default. When enabled, a space is left after an inserted link so you can keep typing straight away, which saves a keystroke on a phone keyboard.
+
+The space is skipped when the text after the link already starts with a space or with a closing symbol such as `)` or `,`. It cannot know about a mark you type *afterwards*, though: with this on, typing `@john` and then `.` gives `[[@John Doe]] .` with the period pushed away from the link. Leave it off if you often end sentences with a mention.
 
 ### Style person links as pills
 

@@ -15,6 +15,7 @@ const DEFAULT_SETTINGS = {
 	folderMode: 'DEFAULT', // 'DEFAULT' | 'PER_PERSON' | 'PER_LASTNAME'
 	autoCreateFiles: false,
 	requireAtPrefix: true,
+	addTrailingSpace: false,
 	useAliases: false,
 	aliasDisplayMode: 'off', // 'off' | 'always' | 'matched'
 	enablePillStyle: false,
@@ -25,6 +26,55 @@ const NAME_REGEX_AT = /\/@([^\/]+)\.md$/     // With @ prefix: "People/@John Doe
 const NAME_REGEX_NO_AT = /\/([^\/]+)\.md$/   // Without @ prefix: "People/John Doe.md" -> "John Doe"
 // Regex to extract last name (last word after splitting by spaces)
 const LAST_NAME_REGEX = /([\S]+)$/
+
+// Characters that must NOT precede the '@' for a mention to start. Everything
+// else (whitespace, parentheses, quotes, dashes, brackets, punctuation) counts
+// as a word boundary, so "(@Jo" or "-@Jo" trigger just like " @Jo" does.
+//   \p{L}\p{N}_ - keeps emails and handles quiet ("name@host", "José@...")
+//   @           - avoids re-triggering on the second '@' of "@@"
+//   [           - typing inside a wikilink belongs to Obsidian's own suggester
+const MENTION_BLOCKED_PREFIX = /[\p{L}\p{N}_@\[]/u
+
+// Used only when the "Add a space after the link" setting is on: what may
+// directly follow an inserted link without a space between them. Whitespace (so
+// the added space never doubles up) plus closers and punctuation that would read
+// as a typo if pushed away from the link.
+const NO_TRAILING_SPACE_BEFORE = /^[\s)\]}>»"'`,.;:!?]/
+
+// Characters a person's name can never contain: they are illegal in a file name
+// on at least one platform (\ / : * ? " < >) or they break the [[wikilink]] the
+// person is referenced with (# ^ | [ ]). Dropped rather than replaced, so the
+// rest of what was typed survives verbatim.
+const ILLEGAL_NAME_CHARS = /[\\/:*?"<>|#^[\]]/g
+
+/**
+ * Normalize a raw query into the name of a person to CREATE.
+ *
+ * Only applies to new people: an existing person's name comes from their file
+ * name and must be used as-is, or the generated link would stop resolving.
+ *
+ * Trimming matters because a query (or a text selection) keeps whatever was
+ * typed, and phone keyboards append a space when a word is accepted, so the
+ * query often ends with one. Left alone, " John Doe " would create
+ * "@ John Doe .md" with a link that resolves to a different name, skip the
+ * last-name folder grouping (LAST_NAME_REGEX needs a non-space at the end) and
+ * miss the person's aliases. A leading '@' is dropped too, since the prefix is
+ * added back when the link is built.
+ *
+ * Runs of inner whitespace collapse to a single space for the same reason: the
+ * suggestion popup renders as HTML, which shows "John  Doe" and "John Doe"
+ * identically, so a doubled space would silently produce a second person file
+ * that looks like the first one. It also closes the gap an illegal character
+ * leaves behind ("Ana : jefa" -> "Ana jefa").
+ *
+ * @returns {string} the name to create, or '' when nothing usable is left
+ */
+const normalizeNewPersonName = (query) => (query || '')
+	.replace(ILLEGAL_NAME_CHARS, '')
+	.replace(/\s+/g, ' ')
+	.trim()
+	.replace(/^@+/, '')
+	.trim()
 
 // Ensure folder path ends with a trailing slash
 const normalizeFolder = (p) => p.endsWith('/') ? p : p + '/'
@@ -458,11 +508,14 @@ function removeAccents(str) {
  * Square root softens the penalty so backlink boosts have more relative weight
  */
 function fuzzyMatch(pattern, text) {
-    // Trim surrounding whitespace from the query: a leading/trailing space (e.g.
-    // added by a phone keyboard) is never meaningful and would otherwise break
-    // the substring match. Always-on behavior, not configurable.
+    // Trim surrounding whitespace on both sides: in the query a leading/trailing
+    // space (e.g. added by a phone keyboard) is never meaningful and would break
+    // the substring match, and in the name it would demote a person whose file
+    // was created with a stray space from "start of name" to "word boundary" and
+    // inflate the length penalty. Scoring only: the name itself is untouched.
+    // Always-on behavior, not configurable.
     pattern = removeAccents(pattern).toLowerCase().trim();
-    text = removeAccents(text).toLowerCase();
+    text = removeAccents(text).toLowerCase().trim();
 
     // Similarity factor: penalizes texts longer than the pattern
     // Range: 0.0 to 1.0, where 1.0 is perfect length match
@@ -665,7 +718,11 @@ class PersonSuggestModal extends SuggestModal {
 		const suggestions = rankPeople(this.app, query, this.peopleFileMap, this.aliasMap, this.settings.useAliases)
 			.map(s => ({ type: 'existing', name: s.name, matchedAlias: s.matchedAlias }))
 
-		suggestions.push({ type: 'create', name: query })
+		// The selection is raw text, so it can carry stray spaces, a leading '@'
+		// or characters no file name accepts. Offer to create only what is left
+		// after cleaning it up, and nothing at all when that is empty.
+		const newName = normalizeNewPersonName(query)
+		if (newName) suggestions.push({ type: 'create', name: newName })
 		return suggestions
 	}
 
@@ -709,10 +766,15 @@ class AtPeopleSuggestor extends EditorSuggest {
 	}
 
 	// Override close to track dismissed '@' position.
-	// When the popup closes without a selection (e.g. Escape or click outside),
-	// record the trigger position so onTrigger can suppress re-activation.
+	// Obsidian closes the popup for several reasons and only a real dismissal
+	// (Escape, click outside) may veto the '@'. The other two must not, or the
+	// column would stay vetoed for the rest of the line:
+	//   - getSuggestions returned nothing: Obsidian's showSuggestions() closes
+	//     the popup itself, with the context still set.
+	//   - the click that closes the popup happens before the cursor move is
+	//     processed (Obsidian debounces it), so the context is stale.
 	close() {
-		if (this.context && !this._selectionMade) {
+		if (this.context && !this._selectionMade && !this.lastListWasEmpty && this.isMentionUnderCursor()) {
 			this.dismissedTrigger = {
 				line: this.context.start.line,
 				ch: this.context.start.ch,
@@ -722,25 +784,58 @@ class AtPeopleSuggestor extends EditorSuggest {
 		super.close()
 	}
 
+	// True when the mention the popup was opened for is still the one the cursor
+	// sits in, i.e. the popup is closing while it could just as well stay open.
+	isMentionUnderCursor() {
+		try {
+			const editor = this.context.editor
+			const cursor = editor.getCursor()
+			if (!cursor || cursor.line !== this.context.start.line) return false
+			const mention = this.findMention(cursor, editor)
+			return !!mention && mention.atIndex === this.context.start.ch
+		} catch (e) {
+			// Missing editor or a cursor outside the document: treat it as gone.
+			return false
+		}
+	}
+
 	updatePeopleMap(peopleFileMap, aliasMap) {
 		this.peopleFileMap = peopleFileMap
 		this.aliasMap = aliasMap
 	}
 	
 	/**
+	 * Find the mention the cursor is currently typing, regardless of whether it
+	 * was dismissed. A mention is an '@' at a word boundary (start of line, or
+	 * after any character that is not part of a word, see MENTION_BLOCKED_PREFIX,
+	 * so an '@' glued to punctuation such as "(@Jo" counts) followed by a query
+	 * that has not run past the end of a link.
+	 *
+	 * @returns {{atIndex: number, query: string}|null}
+	 */
+	findMention(cursor, editor) {
+		const charsLeftOfCursor = editor.getLine(cursor.line).substring(0, cursor.ch)
+		const atIndex = charsLeftOfCursor.lastIndexOf('@')
+		if (atIndex < 0) return null
+		const query = charsLeftOfCursor.substring(atIndex + 1)
+		// The '@' belongs glued to the name, so a space right after it means the
+		// '@' is being used as a word ("Cena @ 21:00") and no mention starts. A
+		// space further along is part of the name ("@Juan Perez"), and so is a
+		// trailing one, which is what a phone keyboard appends when it accepts a
+		// word.
+		if (!/^\S/.test(query) || query.includes(']]')) return null
+		if (atIndex > 0 && MENTION_BLOCKED_PREFIX.test(charsLeftOfCursor[atIndex - 1])) return null
+		return { atIndex, query }
+	}
+
+	/**
 	 * Detect when to trigger the suggester
-	 * Triggers when '@' is typed at start of line or after a space
 	 */
 	onTrigger(cursor, editor, tFile) {
-		let charsLeftOfCursor = editor.getLine(cursor.line).substring(0, cursor.ch)
-		let atIndex = charsLeftOfCursor.lastIndexOf('@')
-		let query = atIndex >= 0 && charsLeftOfCursor.substring(atIndex + 1)
-		
-		if (
-			query
-			&& !query.includes(']]')
-			&& (atIndex === 0 || charsLeftOfCursor[atIndex - 1] === ' ')
-		) {
+		const mention = this.findMention(cursor, editor)
+
+		if (mention) {
+			const { atIndex, query } = mention
 			// Skip if this '@' was dismissed with Escape
 			if (
 				this.dismissedTrigger
@@ -777,7 +872,16 @@ class AtPeopleSuggestor extends EditorSuggest {
 		const suggestions = rankPeople(this.app, context.query, this.peopleFileMap, this.aliasMap, this.plugin.settings.useAliases)
 			.map(s => ({ suggestionType: 'set', displayText: s.name, matchedAlias: s.matchedAlias, context }))
 
-		suggestions.push({ suggestionType: 'create', displayText: context.query, context })
+		// Create the cleaned-up name, not the raw query: it still holds whatever
+		// was typed, including the space phone keyboards append when accepting a
+		// word. The entry shows the exact name that will be created.
+		const newName = normalizeNewPersonName(context.query)
+		if (newName) suggestions.push({ suggestionType: 'create', displayText: newName, context })
+
+		// Obsidian closes the popup on its own when this comes back empty (no
+		// match and no name to create, e.g. "@///"). close() needs to know that
+		// it was not the user dismissing anything.
+		this.lastListWasEmpty = suggestions.length === 0
 		return suggestions
 	}
 
@@ -795,13 +899,18 @@ class AtPeopleSuggestor extends EditorSuggest {
 		this._selectionMade = true
 		this.dismissedTrigger = null
 		const link = await this.plugin.createPersonLink(value.displayText, value.matchedAlias)
+		const { editor, start, end } = value.context
+
+		// Optionally leave the cursor ready for the next word by appending a
+		// space, unless the text right after the insertion point already starts
+		// with one (or with punctuation that must stay glued to the link).
+		const textAfter = editor.getLine(end.line).slice(end.ch)
+		const trailingSpace = this.plugin.settings.addTrailingSpace && !NO_TRAILING_SPACE_BEFORE.test(textAfter)
+			? ' '
+			: ''
 
 		// Replace the '@query' text with the generated link
-		value.context.editor.replaceRange(
-			link,
-			value.context.start,
-			value.context.end,
-		)
+		editor.replaceRange(link + trailingSpace, start, end)
 	}
 }
 
@@ -925,6 +1034,21 @@ class AtPeopleSettingTab extends PluginSettingTab {
 					this.plugin.settings.useExplicitLinks = value
 					await this.plugin.saveSettings()
 					this.plugin.initialize()
+				})
+			)
+		new Setting(containerEl)
+			.setName('Add a space after the link')
+			.setDesc(multiLineDesc([
+			"Leave a space after an inserted link so you can keep typing straight away. Handy on phones.",
+			"",
+			"The space is skipped when the text after the link already starts with a space or with a closing symbol such as ) or , but a mark you type afterwards will be pushed away from the link: \"Talked to @John.\" ends up as \"Talked to [[@John Doe]] .\""
+			]))
+			.addToggle(
+				toggle => toggle
+				.setValue(this.plugin.settings.addTrailingSpace)
+				.onChange(async (value) => {
+					this.plugin.settings.addTrailingSpace = value
+					await this.plugin.saveSettings()
 				})
 			)
 

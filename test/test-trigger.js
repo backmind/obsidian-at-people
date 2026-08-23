@@ -38,12 +38,29 @@ const obsidianStub = {
 	editorLivePreviewField: {},
 	editorInfoField: {},
 }
+// Fake syntax tree. `tokenState` decides what resolveInner() reports for the
+// position under test, mirroring how Obsidian exposes a node's stream-parser
+// classes: a space-separated string read through tokenClassNodeProp (its own
+// code does `new Set(prop.split(' ')).has('hmd-codeblock')`).
+const tokenState = { classes: null, throws: false }
 const cmStub = {
 	ViewPlugin: { fromClass: () => ({}) },
 	Decoration: { mark: () => ({}) },
 	RangeSetBuilder: class { add() {} finish() { return {} } },
-	syntaxTree: () => ({ iterate() {} }),
-	tokenClassNodeProp: {},
+	syntaxTree: () => {
+		if (tokenState.throws) throw new Error('syntax tree unavailable')
+		return {
+			iterate() {},
+			resolveInner: () => tokenState.classes === null ? null : {
+				parent: null,
+				type: {
+					name: tokenState.classes.split(' ').join('_'),
+					prop: (p) => p === cmStub.tokenClassNodeProp ? tokenState.classes : undefined,
+				},
+			},
+		}
+	},
+	tokenClassNodeProp: { name: 'tokenClass' },
 }
 
 const origLoad = Module._load
@@ -246,6 +263,58 @@ const main = async () => {
 	type('hola @jo')
 	clickAt(0)
 	check('clicking away is not a dismissal', type('hola @joh'), 'q="joh"')
+
+	console.log('\n--- Mentions only in prose, not in code/frontmatter/math ---')
+	// An editor that exposes a CM6 view, so the syntax check can run. Without
+	// `cm` (every other test here) the check must fail open and trigger.
+	const cmEditor = { getLine: () => '@Jo', cm: { state: {} }, posToOffset: (pos) => pos.ch }
+	const triggersInToken = (classes) => {
+		tokenState.classes = classes
+		tokenState.throws = false
+		suggestor.dismissedTrigger = null
+		const r = suggestor.onTrigger({ line: 0, ch: 3 }, cmEditor, null)
+		return r ? `q=${r.query}` : null
+	}
+
+	check('fenced code block', triggersInToken('hmd-codeblock'), null)
+	check('code block with highlighting', triggersInToken('hmd-codeblock keyword'), null)
+	check('inline code', triggersInToken('inline-code'), null)
+	check('YAML frontmatter', triggersInToken('hmd-frontmatter'), null)
+	check('math', triggersInToken('formatting-math math'), null)
+	check('inside an existing wikilink', triggersInToken('hmd-internal-link'), null)
+	check('plain prose still triggers', triggersInToken(''), 'q=Jo')
+	check('bold prose still triggers', triggersInToken('strong em'), 'q=Jo')
+	check('no token at all still triggers', triggersInToken(null), 'q=Jo')
+	// Fail open: a tree that blows up must never silence the suggester.
+	tokenState.throws = true
+	suggestor.dismissedTrigger = null
+	check('unavailable syntax tree fails open', (() => {
+		const r = suggestor.onTrigger({ line: 0, ch: 3 }, cmEditor, null)
+		return r ? `q=${r.query}` : null
+	})(), 'q=Jo')
+	tokenState.throws = false
+	tokenState.classes = null
+
+	console.log('\n--- The Escape veto is per file ---')
+	const fileA = { path: 'Notes/A.md' }
+	const fileB = { path: 'Notes/B.md' }
+	const dismissIn = (file) => {
+		suggestor.dismissedTrigger = null
+		const ed = { getLine: () => '@Jo', getCursor: () => ({ line: 0, ch: 3 }) }
+		suggestor.onTrigger({ line: 0, ch: 3 }, ed, file)
+		suggestor.context = { editor: ed, file, start: { line: 0, ch: 0 }, end: { line: 0, ch: 3 }, query: 'Jo' }
+		suggestor.close()
+		suggestor.context = null
+	}
+	const triggersIn = (file) => {
+		const r = suggestor.onTrigger({ line: 0, ch: 4 }, { getLine: () => '@Joh' }, file)
+		return r ? `q=${r.query}` : null
+	}
+
+	dismissIn(fileA)
+	check('same file, same spot: still vetoed', triggersIn(fileA), null)
+	dismissIn(fileA)
+	check('other file, same spot: not vetoed', triggersIn(fileB), 'q=Joh')
 
 	console.log('\n--- "New person" name: trim + illegal characters ---')
 	// Returns the displayText of the 'create' entry, or null when there is none.

@@ -96,8 +96,9 @@ const normalizeNewPersonName = (query) => (query || '')
 	.replace(/^[@\s]+/, '')
 	.trim()
 
-// Ensure folder path ends with a trailing slash
-const normalizeFolder = (p) => p.endsWith('/') ? p : p + '/'
+// Ensure folder path ends with a trailing slash. An empty folder is the vault
+// root and stays empty, so paths built on it do not start with '/'.
+const normalizeFolder = (p) => !p || p.endsWith('/') ? p : p + '/'
 
 // Max candidates to compute expensive scoring boost (backlinks + recency) for.
 // Fuzzy matching runs on all candidates (cheap), then only the top N get the
@@ -119,12 +120,16 @@ const multiLineDesc = (strings) => {
 // Check if a file path represents a person file based on plugin settings
 const getPersonName = (filename, settings) => {
 	if (!filename.startsWith(settings.peopleFolder) || !filename.endsWith('.md')) return false
+	// An empty people folder means the whole vault. Files at the root have no
+	// '/' before their name, which the regexes below expect, so give them one.
+	// Any other folder is matched exactly as before.
+	const path = settings.peopleFolder ? filename : '/' + filename
 	if (settings.requireAtPrefix) {
-		return filename.includes('/@') && NAME_REGEX_AT.exec(filename)?.[1]
+		return path.includes('/@') && NAME_REGEX_AT.exec(path)?.[1]
 	}
 	// Without @ requirement: any .md in the people folder tree is a person
 	// Still strip @ prefix from name if present for consistency
-	const match = NAME_REGEX_NO_AT.exec(filename)
+	const match = NAME_REGEX_NO_AT.exec(path)
 	if (!match) return false
 	const name = match[1]
 	return name.startsWith('@') ? name.slice(1) : name
@@ -366,7 +371,10 @@ module.exports = class AtPeople extends Plugin {
 		// Auto-create folders and files if enabled
 		if (this.settings.autoCreateFiles) {
 			const folderToCreate = targetFolder.replace(/\/$/, '')
-			try { await this.app.vault.createFolder(folderToCreate) } catch (e) { /* exists */ }
+			// Empty when the people folder is the vault root, which always exists.
+			if (folderToCreate) {
+				try { await this.app.vault.createFolder(folderToCreate) } catch (e) { /* exists */ }
+			}
 			try { await this.app.vault.create(filePath, '') } catch (e) { /* exists */ }
 		}
 
@@ -1022,7 +1030,7 @@ class AtPeopleSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName('Files & folders').setHeading()
 		new Setting(containerEl)
 			.setName('People folder')
-			.setDesc('The folder where people files live.')
+			.setDesc('The folder where people files live, subfolders included. Leave empty to use the whole vault.')
 			.addSearch(search => {
 				const handleChange = async (value) => {
 					this.plugin.settings.peopleFolder = value

@@ -409,6 +409,56 @@ const main = async () => {
 	const emptyModal = runCmd('  ')
 	check('blank selection: nothing to create', emptyModal.getSuggestions('').some(s => s.type === 'create'), false)
 
+	console.log('\n--- People folder scope: a common parent, or the whole vault ---')
+	// Issue #17: person files spread over several "People" folders. The scan is
+	// recursive, so a shared parent already covers them, and an empty people
+	// folder stands for the whole vault, root included.
+	const created = []
+	const scopeApp = {
+		...app,
+		vault: {
+			...app.vault,
+			fileMap: {
+				'1.Clients/client_x/People/@Kevin.md': {},
+				'1.Clients/client y/People/@Ana.md': {},
+				'1.Clients/client y/Meetings/2026-11-10.md': {},
+				'2.Areas/People/@Boss.md': {},
+				'@Root Person.md': {},
+				'plain.md': {},
+			},
+			createFolder: async (p) => { created.push(`folder ${p}`) },
+			create: async (p) => { created.push(`file ${p}`) },
+		},
+	}
+	const scoped = new AtPeople(scopeApp, {})
+	await scoped.onload()
+	const peopleWith = (folder) => {
+		scoped.settings.peopleFolder = folder
+		scoped.initialize()
+		return Object.keys(scoped.peopleFileMap).sort().join(', ')
+	}
+	const linkWith = async (settings) => {
+		created.length = 0
+		Object.assign(scoped.settings, settings)
+		const link = await scoped.createPersonLink('New One')
+		return `${link} | ${created.join(' + ')}`
+	}
+	check('shared parent finds every client', peopleWith('1.Clients/'), 'Ana, Kevin')
+	check('empty folder finds the whole vault, root included', peopleWith(''), 'Ana, Boss, Kevin, Root Person')
+	check('empty folder, no @ required: root notes count', (peopleWith(''), scoped.settings.requireAtPrefix = false, scoped.initialize(), Object.keys(scoped.peopleFileMap).includes('plain')), true)
+	scoped.settings.requireAtPrefix = true
+	peopleWith('')
+	check('empty folder: unresolved bare link is a person', scoped.resolvePersonName('@Nobody Yet', ''), 'Nobody Yet')
+	check('empty folder: new person lands at the vault root',
+		await linkWith({ useExplicitLinks: true, autoCreateFiles: true, folderMode: 'DEFAULT' }),
+		'[[@New One.md|@New One]] | file @New One.md')
+	check('empty folder, per person: folder at the root',
+		await linkWith({ folderMode: 'PER_PERSON' }),
+		'[[@New One/@New One.md|@New One]] | folder @New One + file @New One/@New One.md')
+	check('regular folder keeps its paths',
+		(scoped.settings.peopleFolder = 'People/', await linkWith({ folderMode: 'DEFAULT' })),
+		'[[People/@New One.md|@New One]] | folder People + file People/@New One.md')
+
 	console.log(`\n${pass} passed, ${fail} failed`)
 	process.exit(fail ? 1 : 0)
 }

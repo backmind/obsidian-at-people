@@ -459,6 +459,28 @@ const main = async () => {
 		(scoped.settings.peopleFolder = 'People/', await linkWith({ folderMode: 'DEFAULT' })),
 		'[[People/@New One.md|@New One]] | folder People + file People/@New One.md')
 
+	// An existing person is linked where their file is. The folder mode only
+	// says where NEW people go; computing the path for someone who already lives
+	// in a subfolder pointed explicit links at the wrong file and, with
+	// auto-create on, left an empty duplicate at the top of the people folder.
+	const linkExisting = async (name, settings) => {
+		created.length = 0
+		Object.assign(scoped.settings, settings)
+		const link = await scoped.createPersonLink(name)
+		return `${link} | ${created.join(' + ') || 'nothing created'}`
+	}
+	peopleWith('1.Clients/')
+	check('existing person, explicit link: real path, nothing created',
+		await linkExisting('Kevin', { useExplicitLinks: true, autoCreateFiles: true }),
+		'[[1.Clients/client_x/People/@Kevin.md|@Kevin]] | nothing created')
+	check('existing person, bare link: nothing created',
+		await linkExisting('Kevin', { useExplicitLinks: false }),
+		'[[@Kevin]] | nothing created')
+	check('existing person, per-person mode: real path, nothing created',
+		await linkExisting('Ana', { useExplicitLinks: true, folderMode: 'PER_PERSON' }),
+		'[[1.Clients/client y/People/@Ana.md|@Ana]] | nothing created')
+	scoped.settings.folderMode = 'DEFAULT'
+
 	console.log(`\n${pass} passed, ${fail} failed`)
 	process.exit(fail ? 1 : 0)
 }

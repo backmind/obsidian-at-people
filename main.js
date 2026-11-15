@@ -368,8 +368,14 @@ module.exports = class AtPeople extends Plugin {
 			filePath = targetFolder + filename
 		}
 
+		// An existing person is linked where their file actually is: they may
+		// live anywhere in the people folder tree, and the folder mode above only
+		// decides where a NEW person goes.
+		const existingPath = (this.peopleFileMap || {})[display]
+		if (existingPath) filePath = existingPath
+
 		// Auto-create folders and files if enabled
-		if (this.settings.autoCreateFiles) {
+		if (this.settings.autoCreateFiles && !existingPath) {
 			const folderToCreate = targetFolder.replace(/\/$/, '')
 			// Empty when the people folder is the vault root, which always exists.
 			if (folderToCreate) {

@@ -66,6 +66,10 @@ Settings follow the same order as the plugin's settings tab: **Files & folders**
 
 Set the folder where your person files live (e.g. `People/`, `Contacts/`, `Reference/People/`). The plugin scans this folder and all subfolders for person files.
 
+If your people are spread over several folders, such as one `People/` per client under `Clients/`, set the folder to their common parent (`Clients/`). With **Require @ prefix** on, only the `@` files count, so the other notes in those folders stay out of the suggestions. Leave the field empty to use the whole vault.
+
+Two things to keep in mind with a wide folder. New people are created in the folder you set, following the folder mode, not next to the existing ones. And names must be unique across it, since two person files with the same name show up as a single suggestion.
+
 ### Folder mode
 
 Choose how person files are organized:
@@ -212,6 +216,10 @@ Originally created by **[saibotsivad](https://github.com/saibotsivad/obsidian-at
 - **[ph4wks](https://github.com/ph4wks/obsidian-at-people)** — Folder mode variations and auto-file creation
 - **[hExPY](https://github.com/hExPY/obsidian-at-people/)** — Additional enhancements
 - **[backmind](https://github.com/backmind/obsidian-at-people)** — Current maintainer: fuzzy search, accent-insensitive matching, backlink ranking (v1.1.0+)
+
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for what changed in each version.
 
 ## License
 

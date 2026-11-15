@@ -109,17 +109,28 @@ const app = {
 			// Same relevance for the query "zoe", but a clean name.
 			'People/@Zoe Martins.md': {},
 		},
-		getAbstractFileByPath: () => null,
+		// mtime 0 keeps the recency boost at zero, so only backlinks move a rank.
+		getAbstractFileByPath: (p) => (app.vault.fileMap[p] ? { path: p, stat: { mtime: 0 } } : null),
 		getAllFolders: () => [],
 	},
 	metadataCache: {
-		on() {},
+		on(name, fn) { (metaHandlers[name] = metaHandlers[name] || []).push(fn) },
 		getFileCache: () => ({}),
-		getFirstLinkpathDest: () => null,
-		getBacklinksForFile: () => ({ data: new Map() }),
+		getFirstLinkpathDest: () => { calls.resolve++; return calls.dest },
+		// Walks every link in the vault inside Obsidian: the plugin must not
+		// call it while ranking, so the harness only counts the calls.
+		getBacklinksForFile: () => { calls.backlinks++; return { data: new Map() } },
+		// Obsidian's own index: { sourcePath: { destPath: linkCount } }.
+		resolvedLinks: {},
 	},
 	workspace: { onLayoutReady: (fn) => fn() },
 }
+// What the plugin asked of the metadata cache, and what the fake answers.
+const calls = { backlinks: 0, resolve: 0, dest: null }
+// Every plugin instance under test registers its own handlers; an event
+// reaches all of them, as it would in Obsidian.
+const metaHandlers = {}
+const fireMeta = (name) => (metaHandlers[name] || []).forEach(fn => fn())
 
 const AtPeople = require(path.join(__dirname, '..', 'main.js'))
 
@@ -408,6 +419,108 @@ const main = async () => {
 	check('selection "@Pepe " creates "Pepe"', modalCreate ? modalCreate.name : null, 'Pepe')
 	const emptyModal = runCmd('  ')
 	check('blank selection: nothing to create', emptyModal.getSuggestions('').some(s => s.type === 'create'), false)
+
+	console.log('\n--- People folder scope: a common parent, or the whole vault ---')
+	// Issue #17: person files spread over several "People" folders. The scan is
+	// recursive, so a shared parent already covers them, and an empty people
+	// folder stands for the whole vault, root included.
+	const created = []
+	const scopeApp = {
+		...app,
+		vault: {
+			...app.vault,
+			fileMap: {
+				'1.Clients/client_x/People/@Kevin.md': {},
+				'1.Clients/client y/People/@Ana.md': {},
+				'1.Clients/client y/Meetings/2026-11-10.md': {},
+				'2.Areas/People/@Boss.md': {},
+				'@Root Person.md': {},
+				'plain.md': {},
+			},
+			createFolder: async (p) => { created.push(`folder ${p}`) },
+			create: async (p) => { created.push(`file ${p}`) },
+		},
+	}
+	const scoped = new AtPeople(scopeApp, {})
+	await scoped.onload()
+	const peopleWith = (folder) => {
+		scoped.settings.peopleFolder = folder
+		scoped.initialize()
+		return Object.keys(scoped.peopleFileMap).sort().join(', ')
+	}
+	const linkWith = async (settings) => {
+		created.length = 0
+		Object.assign(scoped.settings, settings)
+		const link = await scoped.createPersonLink('New One')
+		return `${link} | ${created.join(' + ')}`
+	}
+	check('shared parent finds every client', peopleWith('1.Clients/'), 'Ana, Kevin')
+	check('empty folder finds the whole vault, root included', peopleWith(''), 'Ana, Boss, Kevin, Root Person')
+	check('empty folder, no @ required: root notes count', (peopleWith(''), scoped.settings.requireAtPrefix = false, scoped.initialize(), Object.keys(scoped.peopleFileMap).includes('plain')), true)
+	scoped.settings.requireAtPrefix = true
+	peopleWith('')
+	check('empty folder: unresolved bare link is a person', scoped.resolvePersonName('@Nobody Yet', ''), 'Nobody Yet')
+	check('empty folder: new person lands at the vault root',
+		await linkWith({ useExplicitLinks: true, autoCreateFiles: true, folderMode: 'DEFAULT' }),
+		'[[@New One.md|@New One]] | file @New One.md')
+	check('empty folder, per person: folder at the root',
+		await linkWith({ folderMode: 'PER_PERSON' }),
+		'[[@New One/@New One.md|@New One]] | folder @New One + file @New One/@New One.md')
+	check('regular folder keeps its paths',
+		(scoped.settings.peopleFolder = 'People/', await linkWith({ folderMode: 'DEFAULT' })),
+		'[[People/@New One.md|@New One]] | folder People + file People/@New One.md')
+
+	// An existing person is linked where their file is. The folder mode only
+	// says where NEW people go; computing the path for someone who already lives
+	// in a subfolder pointed explicit links at the wrong file and, with
+	// auto-create on, left an empty duplicate at the top of the people folder.
+	const linkExisting = async (name, settings) => {
+		created.length = 0
+		Object.assign(scoped.settings, settings)
+		const link = await scoped.createPersonLink(name)
+		return `${link} | ${created.join(' + ') || 'nothing created'}`
+	}
+	peopleWith('1.Clients/')
+	check('existing person, explicit link: real path, nothing created',
+		await linkExisting('Kevin', { useExplicitLinks: true, autoCreateFiles: true }),
+		'[[1.Clients/client_x/People/@Kevin.md|@Kevin]] | nothing created')
+	check('existing person, bare link: nothing created',
+		await linkExisting('Kevin', { useExplicitLinks: false }),
+		'[[@Kevin]] | nothing created')
+	check('existing person, per-person mode: real path, nothing created',
+		await linkExisting('Ana', { useExplicitLinks: true, folderMode: 'PER_PERSON' }),
+		'[[1.Clients/client y/People/@Ana.md|@Ana]] | nothing created')
+	scoped.settings.folderMode = 'DEFAULT'
+
+	console.log('\n--- Cost: ranking and link tagging stay off the whole-vault paths ---')
+	// Backlink counts come from Obsidian's resolved-link index, read once and
+	// kept until Obsidian says the index changed. Counting notes, not links:
+	// two notes link to Zoe Martins, one of them twice.
+	const topZoe = () => suggestor.getSuggestions({ query: 'zoe', editor: null })[0].displayText
+	app.metadataCache.resolvedLinks = {
+		'a.md': { 'People/@Zoe Martins.md': 2, 'People/@John Doe.md': 1 },
+		'b.md': { 'People/@Zoe Martins.md': 1 },
+	}
+	check('counts are kept until the index changes', topZoe(), ' Zoe Ramos ')
+	fireMeta('resolved')
+	check('index change: the most linked person ranks first', topZoe(), 'Zoe Martins')
+	check('backlinks are counted per note', plugin.getBacklinkCounts().get('People/@Zoe Martins.md'), 2)
+	check('ranking never walks the vault', calls.backlinks, 0)
+
+	// Tagging person links asks Obsidian to resolve each visible link on every
+	// editor update, so an answer is reused until the vault changes.
+	calls.resolve = 0
+	check('unknown link is not a person', plugin.resolvePersonName('Jo', 'n.md'), false)
+	plugin.resolvePersonName('Jo', 'n.md')
+	check('a repeated link is resolved once', calls.resolve, 1)
+	plugin.resolvePersonName('Jo', 'other.md')
+	check('per source note: links resolve relative to it', calls.resolve, 2)
+	calls.dest = { path: 'People/@Jo.md' }
+	await plugin.update({ path: 'People/@Jo.md' })
+	check('a new file is seen right after the vault event', plugin.resolvePersonName('Jo', 'n.md'), 'Jo')
+	calls.dest = null
+	await plugin.update({ path: 'People/@Jo.md', deleted: true })
+	check('and gone again once deleted', plugin.resolvePersonName('Jo', 'n.md'), false)
 
 	console.log(`\n${pass} passed, ${fail} failed`)
 	process.exit(fail ? 1 : 0)

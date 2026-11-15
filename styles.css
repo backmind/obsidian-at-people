@@ -25,6 +25,13 @@ body.at-people-styled .at-person {
 	padding: var(--tag-padding-y) var(--tag-padding-x);
 	text-decoration: var(--tag-decoration);
 	line-height: 1;
+	/*
+	 * An inline box is painted as tall as the font's own ascent and descent,
+	 * whatever its line-height, so with a tall font the pill outgrew the line
+	 * and overlapped the pills above and below it. As an inline block its
+	 * height is one line of its own text plus the padding, in any font.
+	 */
+	display: inline-block;
 }
 
 body.at-people-styled .at-person:hover {

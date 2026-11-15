@@ -217,6 +217,10 @@ Originally created by **[saibotsivad](https://github.com/saibotsivad/obsidian-at
 - **[hExPY](https://github.com/hExPY/obsidian-at-people/)** — Additional enhancements
 - **[backmind](https://github.com/backmind/obsidian-at-people)** — Current maintainer: fuzzy search, accent-insensitive matching, backlink ranking (v1.1.0+)
 
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for what changed in each version.
+
 ## License
 
 Published under the [MIT License](./LICENSE).

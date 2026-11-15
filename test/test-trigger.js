@@ -109,17 +109,28 @@ const app = {
 			// Same relevance for the query "zoe", but a clean name.
 			'People/@Zoe Martins.md': {},
 		},
-		getAbstractFileByPath: () => null,
+		// mtime 0 keeps the recency boost at zero, so only backlinks move a rank.
+		getAbstractFileByPath: (p) => (app.vault.fileMap[p] ? { path: p, stat: { mtime: 0 } } : null),
 		getAllFolders: () => [],
 	},
 	metadataCache: {
-		on() {},
+		on(name, fn) { (metaHandlers[name] = metaHandlers[name] || []).push(fn) },
 		getFileCache: () => ({}),
-		getFirstLinkpathDest: () => null,
-		getBacklinksForFile: () => ({ data: new Map() }),
+		getFirstLinkpathDest: () => { calls.resolve++; return calls.dest },
+		// Walks every link in the vault inside Obsidian: the plugin must not
+		// call it while ranking, so the harness only counts the calls.
+		getBacklinksForFile: () => { calls.backlinks++; return { data: new Map() } },
+		// Obsidian's own index: { sourcePath: { destPath: linkCount } }.
+		resolvedLinks: {},
 	},
 	workspace: { onLayoutReady: (fn) => fn() },
 }
+// What the plugin asked of the metadata cache, and what the fake answers.
+const calls = { backlinks: 0, resolve: 0, dest: null }
+// Every plugin instance under test registers its own handlers; an event
+// reaches all of them, as it would in Obsidian.
+const metaHandlers = {}
+const fireMeta = (name) => (metaHandlers[name] || []).forEach(fn => fn())
 
 const AtPeople = require(path.join(__dirname, '..', 'main.js'))
 
@@ -480,6 +491,36 @@ const main = async () => {
 		await linkExisting('Ana', { useExplicitLinks: true, folderMode: 'PER_PERSON' }),
 		'[[1.Clients/client y/People/@Ana.md|@Ana]] | nothing created')
 	scoped.settings.folderMode = 'DEFAULT'
+
+	console.log('\n--- Cost: ranking and link tagging stay off the whole-vault paths ---')
+	// Backlink counts come from Obsidian's resolved-link index, read once and
+	// kept until Obsidian says the index changed. Counting notes, not links:
+	// two notes link to Zoe Martins, one of them twice.
+	const topZoe = () => suggestor.getSuggestions({ query: 'zoe', editor: null })[0].displayText
+	app.metadataCache.resolvedLinks = {
+		'a.md': { 'People/@Zoe Martins.md': 2, 'People/@John Doe.md': 1 },
+		'b.md': { 'People/@Zoe Martins.md': 1 },
+	}
+	check('counts are kept until the index changes', topZoe(), ' Zoe Ramos ')
+	fireMeta('resolved')
+	check('index change: the most linked person ranks first', topZoe(), 'Zoe Martins')
+	check('backlinks are counted per note', plugin.getBacklinkCounts().get('People/@Zoe Martins.md'), 2)
+	check('ranking never walks the vault', calls.backlinks, 0)
+
+	// Tagging person links asks Obsidian to resolve each visible link on every
+	// editor update, so an answer is reused until the vault changes.
+	calls.resolve = 0
+	check('unknown link is not a person', plugin.resolvePersonName('Jo', 'n.md'), false)
+	plugin.resolvePersonName('Jo', 'n.md')
+	check('a repeated link is resolved once', calls.resolve, 1)
+	plugin.resolvePersonName('Jo', 'other.md')
+	check('per source note: links resolve relative to it', calls.resolve, 2)
+	calls.dest = { path: 'People/@Jo.md' }
+	await plugin.update({ path: 'People/@Jo.md' })
+	check('a new file is seen right after the vault event', plugin.resolvePersonName('Jo', 'n.md'), 'Jo')
+	calls.dest = null
+	await plugin.update({ path: 'People/@Jo.md', deleted: true })
+	check('and gone again once deleted', plugin.resolvePersonName('Jo', 'n.md'), false)
 
 	console.log(`\n${pass} passed, ${fail} failed`)
 	process.exit(fail ? 1 : 0)

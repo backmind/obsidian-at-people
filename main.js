@@ -66,7 +66,20 @@ const NON_PROSE_TOKENS = ['hmd-codeblock', 'inline-code', 'hmd-frontmatter', 'ma
 // while the node name carries the same classes joined by underscores, because
 // CodeMirror builds it as style.replace(/ /g, '_'). Callers must be inside a
 // try/catch or hold a node they trust: a node type can be absent entirely.
-const tokenClassesOf = (node) => (node.type.prop(tokenClassNodeProp) || node.type.name || '').split(/[\s_]+/)
+//
+// Node types are shared objects, one per distinct set of classes, so the split
+// is done once per type and remembered: the Live Preview decorator asks this of
+// every visible token on every editor update.
+const tokenClassCache = new WeakMap()
+const tokenClassesOf = (node) => {
+	const type = node.type
+	let classes = tokenClassCache.get(type)
+	if (!classes) {
+		classes = (type.prop(tokenClassNodeProp) || type.name || '').split(/[\s_]+/)
+		tokenClassCache.set(type, classes)
+	}
+	return classes
+}
 
 /**
  * Normalize a raw query into the name of a person to CREATE.
@@ -100,10 +113,14 @@ const normalizeNewPersonName = (query) => (query || '')
 // root and stays empty, so paths built on it do not start with '/'.
 const normalizeFolder = (p) => !p || p.endsWith('/') ? p : p + '/'
 
-// Max candidates to compute expensive scoring boost (backlinks + recency) for.
-// Fuzzy matching runs on all candidates (cheap), then only the top N get the
-// full boost calculation to avoid calling getBacklinksForFile on every person file.
+// Max candidates that get the scoring boost (backlinks + recency) on top of the
+// fuzzy score. Fuzzy matching runs on all candidates, then only the top N are
+// boosted and re-sorted.
 const BOOST_CUTOFF = 30
+
+// Entries kept in the link-resolution cache before it is simply emptied. A
+// vault change empties it anyway; this only bounds a long session.
+const RESOLVE_CACHE_MAX = 5000
 
 // Helper to create multi-line descriptions in settings UI
 const multiLineDesc = (strings) => {
@@ -143,6 +160,8 @@ module.exports = class AtPeople extends Plugin {
 		this.registerEvent(this.app.vault.on('create', async event => { await this.update(event) }))
 		this.registerEvent(this.app.vault.on('rename', async (event, originalFilepath) => { await this.update(event, originalFilepath) }))
 		this.registerEvent(this.app.metadataCache.on('changed', (file) => { this.updateAliasesForFile(file) }))
+		// Obsidian finished re-resolving links: the backlink counts are stale.
+		this.registerEvent(this.app.metadataCache.on('resolved', () => { this.backlinkCounts = null }))
 		this.addSettingTab(new AtPeopleSettingTab(this.app, this))
 		this.suggestor = new AtPeopleSuggestor(this.app, this)
 		this.registerEditorSuggest(this.suggestor)
@@ -175,6 +194,7 @@ module.exports = class AtPeople extends Plugin {
 					this.peopleFileMap,
 					this.aliasMap,
 					this.settings,
+					this.getBacklinkCounts,
 					selection,
 					async (personName, matchedAlias) => {
 						const link = await this.createPersonLink(personName, matchedAlias)
@@ -223,8 +243,25 @@ module.exports = class AtPeople extends Plugin {
 	// Resolve the person name a link target refers to, or false if it is not a
 	// person. Uses the resolved file when it exists, with a path-based fallback
 	// so links to not-yet-created person files are still tagged.
+	//
+	// Answers are remembered per link and source note, because both views ask
+	// again for every visible link on every update. A link can only start or stop
+	// resolving to a person when a file is created, deleted or renamed, or when
+	// the people settings change, and each of those empties the cache.
+	resolveCache = new Map()
 	resolvePersonName = (linkpath, sourcePath) => {
 		if (!linkpath) return false
+		const key = linkpath + '\n' + (sourcePath || '')
+		let name = this.resolveCache.get(key)
+		if (name === undefined) {
+			name = this.lookUpPersonName(linkpath, sourcePath) || false
+			if (this.resolveCache.size >= RESOLVE_CACHE_MAX) this.resolveCache.clear()
+			this.resolveCache.set(key, name)
+		}
+		return name
+	}
+
+	lookUpPersonName = (linkpath, sourcePath) => {
 		const dest = this.app.metadataCache.getFirstLinkpathDest(linkpath, sourcePath || '')
 		if (dest) return getPersonName(dest.path, this.settings)
 		// Unresolved link (the person file may not exist yet).
@@ -241,6 +278,23 @@ module.exports = class AtPeople extends Plugin {
 
 	updatePeopleMap = () => {
 		this.suggestor.updatePeopleMap(this.peopleFileMap, this.aliasMap)
+	}
+
+	// How many notes link to each file, keyed by file path. Read in one pass
+	// from the resolved-link index Obsidian already maintains, and kept until
+	// Obsidian reports that index changed. It is the same number
+	// getBacklinksForFile(file).data.size gives, but that call walks every link
+	// in the vault and resolves it again, once per candidate and keystroke.
+	getBacklinkCounts = () => {
+		if (!this.backlinkCounts) {
+			const counts = new Map()
+			const resolved = this.app.metadataCache.resolvedLinks || {}
+			for (const source in resolved) {
+				for (const dest in resolved[source]) counts.set(dest, (counts.get(dest) || 0) + 1)
+			}
+			this.backlinkCounts = counts
+		}
+		return this.backlinkCounts
 	}
 
 	// Read aliases from a person file's frontmatter cache
@@ -276,6 +330,8 @@ module.exports = class AtPeople extends Plugin {
 
 	// Update the people map when files are created, deleted, or renamed
 	update = async ({ path, deleted }, originalFilepath) => {
+		// Any file appearing, moving or going away can change where a link points.
+		this.resolveCache.clear()
 		this.peopleFileMap = this.peopleFileMap || {}
 		this.aliasMap = this.aliasMap || {}
 		const name = getPersonName(path, this.settings)
@@ -312,6 +368,7 @@ module.exports = class AtPeople extends Plugin {
 
 	// Initialize the people map by scanning all files in the vault
 	initialize = () => {
+		this.resolveCache.clear()
 		this.peopleFileMap = {}
 		this.aliasMap = {}
 		for (const filename in this.app.vault.fileMap) {
@@ -471,11 +528,11 @@ function buildPersonLinkExtension(plugin) {
 							// class, so they are skipped here (this is why a
 							// bracket-based regex over the token range fails: the
 							// token covers only the inner text).
-							const classes = new Set(tokenClassesOf(node))
-							if (!classes.has('hmd-internal-link')) return
-							if (classes.has('link-alias-pipe')) return // the "|" separator
+							const classes = tokenClassesOf(node)
+							if (!classes.includes('hmd-internal-link')) return
+							if (classes.includes('link-alias-pipe')) return // the "|" separator
 
-							if (classes.has('link-alias')) {
+							if (classes.includes('link-alias')) {
 								// The visible alias in [[target|Alias]]. Tag it when its
 								// target resolved to a person.
 								if (pendingPerson) {
@@ -497,7 +554,7 @@ function buildPersonLinkExtension(plugin) {
 							// When the link has an alias the target text is hidden and the
 							// alias token (handled above) carries the visible text, so only
 							// tag the target itself when there is no alias.
-							if (personName && !classes.has('link-has-alias')) {
+							if (personName && !classes.includes('link-has-alias')) {
 								builder.add(node.from, node.to, Decoration.mark({
 									class: 'at-person',
 									attributes: { 'data-at-person': String(personName) },
@@ -641,19 +698,16 @@ function fuzzyMatch(pattern, text) {
  *
  * @param {Object} app - Obsidian app instance
  * @param {string} filepath - Path to the person file
+ * @param {Map<string, number>} backlinkCounts - Notes linking to each file path
  * @returns {number} Boost score to add to pattern matching score
  */
-function getScoringBoost(app, filepath) {
+function getScoringBoost(app, filepath, backlinkCounts) {
     const file = app.vault.getAbstractFileByPath(filepath);
     if (!file) return 0;
 
     // Backlink boost: high multiplier so frequently-referenced people overcome length penalties
-    let backlinkBoost = 0;
-    const backlinks = app.metadataCache.getBacklinksForFile(file);
-    if (backlinks?.data) {
-        const count = backlinks.data.size;
-        backlinkBoost = count > 0 ? Math.log(count + 1) * 1000 : 0;
-    }
+    const count = backlinkCounts.get(filepath) || 0;
+    const backlinkBoost = count > 0 ? Math.log(count + 1) * 1000 : 0;
 
     // Recency boost: exponential decay based on file modification time
     const daysAgo = (Date.now() - file.stat.mtime) / 86400000;
@@ -666,13 +720,14 @@ function getScoringBoost(app, filepath) {
  * Rank person candidates for a query and return the best matches.
  *
  * Two-pass approach shared by the editor suggester and the command modal so
- * both rank identically: cheap fuzzy matching over every name (and over aliases
- * when enabled), then the expensive backlink + recency boost on only the top
- * BOOST_CUTOFF candidates. Returns at most 20 entries as { name, matchedAlias }.
+ * both rank identically: fuzzy matching over every name (and over aliases when
+ * enabled), then the backlink + recency boost on only the top BOOST_CUTOFF
+ * candidates. Returns at most 20 entries as { name, matchedAlias }.
  *
+ * @param {Map<string, number>} backlinkCounts - see AtPeople.getBacklinkCounts
  * @returns {Array<{name: string, matchedAlias: string|null}>}
  */
-function rankPeople(app, query, peopleFileMap, aliasMap, useAliases) {
+function rankPeople(app, query, peopleFileMap, aliasMap, useAliases, backlinkCounts) {
 	const bestByPerson = {}
 
 	// First pass: cheap fuzzy matching against names
@@ -702,7 +757,7 @@ function rankPeople(app, query, peopleFileMap, aliasMap, useAliases) {
 
 	// Second pass: add scoring boost (backlinks + recency) only for top candidates
 	for (const candidate of topCandidates) {
-		candidate.score += getScoringBoost(app, peopleFileMap[candidate.name])
+		candidate.score += getScoringBoost(app, peopleFileMap[candidate.name], backlinkCounts)
 	}
 
 	// Re-sort with boost and take final 20
@@ -715,11 +770,12 @@ function rankPeople(app, query, peopleFileMap, aliasMap, useAliases) {
  * Allows converting highlighted text into a person link
  */
 class PersonSuggestModal extends SuggestModal {
-	constructor(app, peopleFileMap, aliasMap, settings, initialQuery, onChoose) {
+	constructor(app, peopleFileMap, aliasMap, settings, getBacklinkCounts, initialQuery, onChoose) {
 		super(app)
 		this.peopleFileMap = peopleFileMap
 		this.aliasMap = aliasMap
 		this.settings = settings
+		this.getBacklinkCounts = getBacklinkCounts
 		this.initialQuery = initialQuery
 		this.onChoose = onChoose
 		this.setPlaceholder('Select person or create new')
@@ -747,7 +803,7 @@ class PersonSuggestModal extends SuggestModal {
 	getSuggestions(query) {
 		if (!query) query = this.initialQuery
 
-		const suggestions = rankPeople(this.app, query, this.peopleFileMap, this.aliasMap, this.settings.useAliases)
+		const suggestions = rankPeople(this.app, query, this.peopleFileMap, this.aliasMap, this.settings.useAliases, this.getBacklinkCounts())
 			.map(s => ({ type: 'existing', name: s.name, matchedAlias: s.matchedAlias }))
 
 		// The selection is raw text, so it can carry stray spaces, a leading '@'
@@ -942,13 +998,11 @@ class AtPeopleSuggestor extends EditorSuggest {
 	}
 	
 	/**
-	 * Get suggestions based on the current query
-	 * Two-pass approach: cheap fuzzy matching first, then expensive scoring boost
-	 * only for top candidates. This avoids calling getBacklinksForFile on every
-	 * person file on every keystroke.
+	 * Get suggestions based on the current query: fuzzy matching over every
+	 * person, then the backlink and recency boost for the top candidates only.
 	 */
 	getSuggestions(context) {
-		const suggestions = rankPeople(this.app, context.query, this.peopleFileMap, this.aliasMap, this.plugin.settings.useAliases)
+		const suggestions = rankPeople(this.app, context.query, this.peopleFileMap, this.aliasMap, this.plugin.settings.useAliases, this.plugin.getBacklinkCounts())
 			.map(s => ({ suggestionType: 'set', displayText: s.name, matchedAlias: s.matchedAlias, context }))
 
 		// Create the cleaned-up name, not the raw query: it still holds whatever
